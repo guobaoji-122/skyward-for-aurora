@@ -47,6 +47,7 @@ const RETRY: &str = "retry";
 
 /// Scripts written for other recoveries start with the shell they find
 /// here, and look for programs where those recoveries keep them.
+const RECOVERY_BINARY: &str = "/system/bin/recovery";
 const SBIN_SHELL: &str = "/sbin/sh";
 const SBIN_BASH: &str = "/sbin/bash";
 const SHELL: &str = "/system/bin/sh";
@@ -1018,6 +1019,16 @@ exec unzip -p "$3" "$4"
 /// a package whose script says `#!/sbin/bash` otherwise does not run at
 /// all, which is what a Durex install did.
 fn shell_at_sbin() -> Result<()> {
+    for command in skyward_config::ramdisk::COMMANDS {
+        let link = Path::new("/sbin").join(Path::new(command).file_name().expect("a command has a name"));
+        match fs::symlink_metadata(&link) {
+            Ok(_) => continue,
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("look at {}", link.display())),
+        }
+        symlink(Path::new(RECOVERY_BINARY), &link)
+            .with_context(|| format!("link {} to {RECOVERY_BINARY}", link.display()))?;
+    }
     for name in [SBIN_SHELL, SBIN_BASH] {
         let link = Path::new(name);
         match fs::symlink_metadata(link) {
