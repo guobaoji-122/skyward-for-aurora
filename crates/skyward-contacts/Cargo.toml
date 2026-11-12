@@ -1,0 +1,11 @@
+[package]
+name = "skyward-contacts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+# The same version the key service's own store is read with, so that the
+# SQLite it brings is one library and not two.
+rusqlite = { version = "0.40.2", features = ["bundled"] }

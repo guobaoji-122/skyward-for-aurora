@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/skyward",
     "crates/skyward-config",
+    "crates/skyward-contacts",
     "crates/skyward-binder",
     "crates/skyward-backup",
     "crates/skyward-block",

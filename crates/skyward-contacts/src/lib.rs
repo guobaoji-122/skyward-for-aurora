@@ -1,0 +1,372 @@
+//! What the phone's own contacts provider keeps: the people it knows and
+//! the calls it recorded.
+//!
+//! The provider keeps its tables in a database of its own, in the part of
+//! the data partition that only opens once the owner's credential has been
+//! given. The tables are the ones Android's contacts provider has used for
+//! years, where a row of `data` holds a value of any kind and the kind is
+//! named by the row's `mimetype_id` — the number of which is the provider's
+//! own business and changes between releases, so it is never written down
+//! here but looked up in the `mimetypes` table instead.
+//!
+//! The database is read as it lies: it is opened with `immutable=1`, which
+//! tells SQLite that nothing will change it, so it needs neither a lock nor
+//! the right to write. What that costs is the write-ahead log beside it —
+//! the provider writes there first and copies into the database later — so a
+//! copy that keeps the log is opened the ordinary way when the first
+//! reading comes back empty.
+
+use anyhow::{bail, Context, Result};
+use rusqlite::{Connection, OpenFlags};
+use std::path::{Path, PathBuf};
+
+/// Where the contacts provider keeps what it knows.
+pub const DATABASE: &str = "/data/user/0/com.android.providers.contacts/databases/contacts2.db";
+
+/// Where the provider keeps the calls that were made.
+pub const CALLS: &str = "/data/user/0/com.android.providers.contacts/databases/calllog.db";
+
+/// The kind of value a row of `data` holds when it is a telephone number.
+const PHONE: &str = "vnd.android.cursor.item/phone_v2";
+
+/// The kind of value a row of `data` holds when it is a name.
+const NAME: &str = "vnd.android.cursor.item/name";
+
+/// A person the phone knows, with the numbers it has for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contact {
+    /// The provider's own number for the person.
+    pub id: i64,
+    /// The name the phone shows, which may be empty.
+    pub name: String,
+    /// The numbers the phone has for them.
+    pub numbers: Vec<String>,
+}
+
+/// A call the phone recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Call {
+    /// The number the other end had, as the phone saw it.
+    pub number: String,
+    /// When it was, in milliseconds since the epoch.
+    pub at: i64,
+    /// How long it lasted, in seconds.
+    pub seconds: i64,
+    /// What kind of call it was: 1 incoming, 2 outgoing, 3 missed, 4 voicemail.
+    pub kind: i64,
+}
+
+/// What kind of call a number of the provider's own means.
+pub const INCOMING: i64 = 1;
+pub const OUTGOING: i64 = 2;
+pub const MISSED: i64 = 3;
+pub const VOICEMAIL: i64 = 4;
+
+/// The phone's contacts, as its provider keeps them.
+pub struct Contacts {
+    db: Connection,
+}
+
+impl Contacts {
+    /// Open the provider's database, as it lies on the phone.
+    pub fn open(database: &Path) -> Result<Self> {
+        let at = format!("file:{}?immutable=1", database.display());
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
+        let db = Connection::open_with_flags(&at, flags).with_context(|| format!("open {}", database.display()))?;
+        Ok(Self { db })
+    }
+
+    /// Every person the provider knows, in the order the phone would show them.
+    pub fn all(&self) -> Result<Vec<Contact>> {
+        self.gather(
+            "SELECT c._id, c.display_name, d.data1
+             FROM contacts c
+             JOIN raw_contacts r ON r.contact_id = c._id
+             JOIN data d ON d.raw_contact_id = r._id
+             JOIN mimetypes m ON m._id = d.mimetype_id
+             WHERE m.mimetype = ?1 AND r.deleted = 0 AND d.data1 IS NOT NULL
+             ORDER BY c._id",
+            None,
+        )
+    }
+
+    /// The people whose name or one of their numbers holds `text`.
+    pub fn search(&self, text: &str) -> Result<Vec<Contact>> {
+        let text = text.trim();
+        if text.is_empty() {
+            return self.all();
+        }
+        let like = format!("%{text}%");
+        self.gather(
+            "SELECT c._id, c.display_name, d.data1
+             FROM contacts c
+             JOIN raw_contacts r ON r.contact_id = c._id
+             JOIN data d ON d.raw_contact_id = r._id
+             JOIN mimetypes m ON m._id = d.mimetype_id
+             WHERE m.mimetype = ?1 AND r.deleted = 0 AND d.data1 IS NOT NULL
+               AND (c.display_name LIKE ?2 OR d.data1 LIKE ?2)
+             ORDER BY c._id",
+            Some(like),
+        )
+    }
+
+    /// The names the provider holds on its own.
+    pub fn names(&self) -> Result<Vec<String>> {
+        let mut query = self
+            .db
+            .prepare(
+                "SELECT d.data1 FROM data d
+                 JOIN mimetypes m ON m._id = d.mimetype_id
+                 WHERE m.mimetype = ?1 AND d.data1 IS NOT NULL",
+            )
+            .context("ask the provider for the names it holds")?;
+        let mut rows = query.query((NAME,)).context("ask the provider for the names it holds")?;
+        let mut names = Vec::new();
+        while let Some(row) = rows.next().context("read the names the provider holds")? {
+            let name: String = row.get(0).context("read a name")?;
+            let name = name.trim();
+            if !name.is_empty() {
+                names.push(name.to_string());
+            }
+        }
+        Ok(names)
+    }
+
+    /// Ask the provider for the people it knows, with the numbers it has
+    /// for them. The provider keeps one row per number, so a person with two
+    /// numbers shows up twice; the second time they are met, their number is
+    /// added to the one already gathered.
+    ///
+    /// `extra` is bound to the second parameter the statement may name, and
+    /// is left out when the statement names none: SQLite insists on a value
+    /// for every parameter it is given, and on none it does not name.
+    fn gather(&self, sql: &str, extra: Option<String>) -> Result<Vec<Contact>> {
+        let mut query = self.db.prepare(sql).context("ask the provider for the people it knows")?;
+        let mut rows = match &extra {
+            Some(text) => query.query(rusqlite::params![PHONE, text]),
+            None => query.query(rusqlite::params![PHONE]),
+        }
+        .context("ask the provider for the people it knows")?;
+        let mut people: Vec<Contact> = Vec::new();
+        while let Some(row) = rows.next().context("read the people the provider knows")? {
+            let id: i64 = row.get(0).context("read a person's number")?;
+            let name: Option<String> = row.get(1).context("read a person's name")?;
+            let number: String = row.get(2).context("read a person's number")?;
+            let number = number.trim();
+            if number.is_empty() {
+                continue;
+            }
+            match people.iter_mut().find(|p| p.id == id) {
+                Some(person) => {
+                    if !person.numbers.iter().any(|n| n == number) {
+                        person.numbers.push(number.to_string());
+                    }
+                }
+                None => people.push(Contact {
+                    id,
+                    name: name.unwrap_or_default(),
+                    numbers: vec![number.to_string()],
+                }),
+            }
+        }
+        Ok(people)
+    }
+}
+
+/// The calls the provider recorded.
+pub struct Calls {
+    db: Connection,
+}
+
+impl Calls {
+    /// Open the provider's record of calls, as it lies on the phone.
+    pub fn open(database: &Path) -> Result<Self> {
+        let at = format!("file:{}?immutable=1", database.display());
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
+        let db = Connection::open_with_flags(&at, flags).with_context(|| format!("open {}", database.display()))?;
+        Ok(Self { db })
+    }
+
+    /// The calls, the most recent first, at most `limit` of them.
+    pub fn recent(&self, limit: usize) -> Result<Vec<Call>> {
+        let mut query = self
+            .db
+            .prepare("SELECT number, date, duration, type FROM calls ORDER BY date DESC LIMIT ?1")
+            .context("ask the provider for the calls it recorded")?;
+        let mut rows = query.query((limit as i64,)).context("ask the provider for the calls it recorded")?;
+        let mut calls = Vec::new();
+        while let Some(row) = rows.next().context("read the calls the provider recorded")? {
+            let number: Option<String> = row.get(0).context("read a call's number")?;
+            let at: i64 = row.get(1).context("read when a call was")?;
+            let seconds: i64 = row.get(2).context("read how long a call was")?;
+            let kind: i64 = row.get(3).context("read what kind of call it was")?;
+            calls.push(Call {
+                number: number.unwrap_or_default(),
+                at,
+                seconds,
+                kind,
+            });
+        }
+        Ok(calls)
+    }
+}
+
+/// A copy of the provider's database that keeps the log beside it, so that
+/// what the provider has not yet copied into the database is there to be
+/// read. The copy is made where it can be written to, for SQLite wants the
+/// right to write the lock file that goes with a log.
+pub fn with_log(database: &Path, into: &Path) -> Result<PathBuf> {
+    let mut copied: Vec<PathBuf> = Vec::new();
+    for name in [database.to_path_buf(), side(database, "-wal"), side(database, "-shm")] {
+        if !name.is_file() {
+            continue;
+        }
+        let to = into.join(name.file_name().unwrap_or_default());
+        std::fs::copy(&name, &to).with_context(|| format!("copy {} to {}", name.display(), to.display()))?;
+        copied.push(to);
+    }
+    if copied.is_empty() {
+        bail!("{} is not there to copy", database.display());
+    }
+    Ok(copied.remove(0))
+}
+
+/// The file that lies beside the given one, with the given ending.
+fn side(database: &Path, ending: &str) -> PathBuf {
+    let mut name = database.as_os_str().to_os_string();
+    name.push(ending);
+    PathBuf::from(name)
+}
+
+#[cfg(test)]
+mod testing;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// A place of its own for the test to keep its database in. The name of
+    /// the test is in it, for the tests run beside one another.
+    fn somewhere() -> PathBuf {
+        let who = std::thread::current().name().unwrap_or("test").to_string();
+        let who: String = who.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+        let dir = std::env::temp_dir().join(format!("skyward-contacts-{}-{who}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("make a place for the test");
+        dir
+    }
+
+    #[test]
+    fn the_people_the_provider_knows_are_gathered() {
+        let dir = somewhere();
+        let db = dir.join("contacts2.db");
+        testing::make(
+            &db,
+            &[
+                ("Zhang San", &["+8613800138000", "+8613900139000"]),
+                ("Li Si", &["+8613700137000"]),
+                ("Wang Wu", &["+8613600136000"]),
+            ],
+        );
+        let contacts = Contacts::open(&db).expect("open the provider's database");
+        let all = contacts.all().expect("ask for the people it knows");
+        assert_eq!(all.len(), 3, "every person is found: {all:?}");
+        let zhang = all.iter().find(|c| c.name == "Zhang San").expect("Zhang San is there");
+        assert_eq!(zhang.numbers.len(), 2, "both of Zhang San's numbers are kept: {zhang:?}");
+        assert!(zhang.numbers.contains(&"+8613800138000".to_string()));
+        assert!(zhang.numbers.contains(&"+8613900139000".to_string()));
+        let li = all.iter().find(|c| c.name == "Li Si").expect("Li Si is there");
+        assert_eq!(li.numbers, vec!["+8613700137000".to_string()]);
+    }
+
+    #[test]
+    fn a_person_marked_deleted_is_not_among_them() {
+        let dir = somewhere();
+        let db = dir.join("contacts2.db");
+        testing::make(&db, &[("Zhang San", &["+8613800138000"])]);
+        // The provider keeps a person it has been told to forget, but still
+        // waiting for the account that held it to be told as well.
+        rusqlite::Connection::open(&db)
+            .expect("open the database")
+            .execute("UPDATE raw_contacts SET deleted = 1", [])
+            .expect("mark the person as deleted");
+        let contacts = Contacts::open(&db).expect("open the provider's database");
+        let all = contacts.all().expect("ask for the people it knows");
+        assert!(all.is_empty(), "a deleted person is not among them: {all:?}");
+    }
+
+    #[test]
+    fn the_people_are_found_by_name_and_by_number() {
+        let dir = somewhere();
+        let db = dir.join("contacts2.db");
+        testing::make(
+            &db,
+            &[
+                ("Zhang San", &["+8613800138000"]),
+                ("Li Si", &["+8613700137000"]),
+            ],
+        );
+        let contacts = Contacts::open(&db).expect("open the provider's database");
+        let by_name = contacts.search("Zhang").expect("search by name");
+        assert_eq!(by_name.len(), 1, "one person holds the name: {by_name:?}");
+        assert_eq!(by_name[0].name, "Zhang San");
+        let by_number = contacts.search("1380013").expect("search by number");
+        assert_eq!(by_number.len(), 1, "one person holds the number: {by_number:?}");
+        assert_eq!(by_number[0].name, "Zhang San");
+        let none = contacts.search("nobody here").expect("search for someone who is not there");
+        assert!(none.is_empty(), "no one is found: {none:?}");
+        let empty = contacts.search("  ").expect("search for nothing");
+        assert_eq!(empty.len(), 2, "searching for nothing finds everyone: {empty:?}");
+    }
+
+    #[test]
+    fn the_calls_the_provider_recorded_are_read() {
+        let dir = somewhere();
+        let db = dir.join("calllog.db");
+        testing::make_calls(
+            &db,
+            &[
+                ("+8613800138000", 1_700_000_000_000, 30, OUTGOING),
+                ("+8613700137000", 1_700_000_100_000, 0, MISSED),
+            ],
+        );
+        let calls = Calls::open(&db).expect("open the provider's record of calls");
+        let recent = calls.recent(10).expect("ask for the calls it recorded");
+        assert_eq!(recent.len(), 2, "both calls are found: {recent:?}");
+        assert_eq!(recent[0].number, "+8613700137000", "the newer call comes first");
+        assert_eq!(recent[0].kind, MISSED);
+        assert_eq!(recent[1].seconds, 30);
+    }
+
+    #[test]
+    fn a_copy_keeps_the_log_that_lies_beside_the_database() {
+        let dir = somewhere();
+        let db = dir.join("contacts2.db");
+        testing::make(&db, &[("Zhang San", &["+8613800138000"])]);
+        // The provider writes to a log beside the database first, and the
+        // log is what a copy that keeps it will have.
+        std::fs::write(dir.join("contacts2.db-wal"), b"a log of its own").expect("write a log");
+        let into = dir.join("copy");
+        std::fs::create_dir_all(&into).expect("make a place for the copy");
+        let copied = with_log(&db, &into).expect("copy the database with its log");
+        assert!(copied.is_file(), "the database is copied");
+        assert!(into.join("contacts2.db-wal").is_file(), "the log is copied as well");
+    }
+
+    #[test]
+    fn a_number_of_the_providers_own_is_read_as_a_string() {
+        // The provider keeps a number in a column of its own, which may hold
+        // a number that is not text at all.
+        let dir = somewhere();
+        let db = dir.join("contacts2.db");
+        testing::make(&db, &[("Zhang San", &["+8613800138000"])]);
+        rusqlite::Connection::open(&db)
+            .expect("open the database")
+            .execute("UPDATE data SET data1 = 13800138000 WHERE mimetype_id != 1", [])
+            .expect("put a number that is not text in the column");
+        let contacts = Contacts::open(&db).expect("open the provider's database");
+        let all = contacts.all().expect("ask for the people it knows");
+        assert_eq!(all.len(), 1, "the person is still found: {all:?}");
+    }
+}

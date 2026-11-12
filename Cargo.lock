@@ -2323,6 +2323,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "skyward-contacts"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "rusqlite",
+]
+
+[[package]]
 name = "skyward-crypto"
 version = "0.2.0"
 dependencies = [
