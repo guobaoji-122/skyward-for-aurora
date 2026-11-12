@@ -29,9 +29,6 @@ pub const CALLS: &str = "/data/user/0/com.android.providers.contacts/databases/c
 /// The kind of value a row of `data` holds when it is a telephone number.
 const PHONE: &str = "vnd.android.cursor.item/phone_v2";
 
-/// The kind of value a row of `data` holds when it is a name.
-const NAME: &str = "vnd.android.cursor.item/name";
-
 /// A person the phone knows, with the numbers it has for them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contact {
@@ -79,12 +76,13 @@ impl Contacts {
     /// Every person the provider knows, in the order the phone would show them.
     pub fn all(&self) -> Result<Vec<Contact>> {
         self.gather(
-            "SELECT c._id, c.display_name, d.data1
+            "SELECT c._id, name_raw_contact.display_name, d.data1
              FROM contacts c
+             JOIN raw_contacts AS name_raw_contact ON (c.name_raw_contact_id = name_raw_contact._id)
              JOIN raw_contacts r ON r.contact_id = c._id
              JOIN data d ON d.raw_contact_id = r._id
              JOIN mimetypes m ON m._id = d.mimetype_id
-             WHERE m.mimetype = ?1 AND r.deleted = 0 AND d.data1 IS NOT NULL
+             WHERE m.mimetype = ?1 AND r.deleted = 0 AND name_raw_contact.deleted = 0 AND d.data1 IS NOT NULL
              ORDER BY c._id",
             None,
         )
@@ -98,29 +96,30 @@ impl Contacts {
         }
         let like = format!("%{text}%");
         self.gather(
-            "SELECT c._id, c.display_name, d.data1
+            "SELECT c._id, name_raw_contact.display_name, d.data1
              FROM contacts c
+             JOIN raw_contacts AS name_raw_contact ON (c.name_raw_contact_id = name_raw_contact._id)
              JOIN raw_contacts r ON r.contact_id = c._id
              JOIN data d ON d.raw_contact_id = r._id
              JOIN mimetypes m ON m._id = d.mimetype_id
-             WHERE m.mimetype = ?1 AND r.deleted = 0 AND d.data1 IS NOT NULL
-               AND (c.display_name LIKE ?2 OR d.data1 LIKE ?2)
+             WHERE m.mimetype = ?1 AND r.deleted = 0 AND name_raw_contact.deleted = 0 AND d.data1 IS NOT NULL
+               AND (name_raw_contact.display_name LIKE ?2 OR d.data1 LIKE ?2)
              ORDER BY c._id",
             Some(like),
         )
     }
 
-    /// The names the provider holds on its own.
+    /// The names the provider holds on its own: the display name each of its
+    /// raw rows carries, with the repeats taken out.
     pub fn names(&self) -> Result<Vec<String>> {
         let mut query = self
             .db
             .prepare(
-                "SELECT d.data1 FROM data d
-                 JOIN mimetypes m ON m._id = d.mimetype_id
-                 WHERE m.mimetype = ?1 AND d.data1 IS NOT NULL",
+                "SELECT DISTINCT display_name FROM raw_contacts
+                 WHERE deleted = 0 AND display_name IS NOT NULL",
             )
             .context("ask the provider for the names it holds")?;
-        let mut rows = query.query((NAME,)).context("ask the provider for the names it holds")?;
+        let mut rows = query.query([]).context("ask the provider for the names it holds")?;
         let mut names = Vec::new();
         while let Some(row) = rows.next().context("read the names the provider holds")? {
             let name: String = row.get(0).context("read a name")?;
@@ -191,7 +190,7 @@ impl Calls {
     pub fn recent(&self, limit: usize) -> Result<Vec<Call>> {
         let mut query = self
             .db
-            .prepare("SELECT number, date, duration, type FROM calls ORDER BY date DESC LIMIT ?1")
+            .prepare("SELECT number, date, duration, type FROM calls WHERE deleted = 0 ORDER BY date DESC LIMIT ?1")
             .context("ask the provider for the calls it recorded")?;
         let mut rows = query.query((limit as i64,)).context("ask the provider for the calls it recorded")?;
         let mut calls = Vec::new();

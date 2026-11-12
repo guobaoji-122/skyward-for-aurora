@@ -1,5 +1,9 @@
 //! A provider's database of its own, made for the tests to read: the tables
-//! Android's contacts provider keeps, with a few people in them.
+//! Android's contacts provider keeps, with a few people in them. The shape
+//! here is the one the provider actually uses on the device — the display
+//! name lives on `raw_contacts`, and `contacts` points at it through
+//! `name_raw_contact_id` — so the production reading is exercised against the
+//! same join it will meet on the phone.
 
 use rusqlite::Connection;
 use std::path::Path;
@@ -16,12 +20,12 @@ pub fn make(path: &Path, people: &[(&str, &[&str])]) {
              account_id INTEGER,
              contact_id INTEGER,
              deleted INTEGER NOT NULL DEFAULT 0,
+             display_name TEXT,
              account_name TEXT,
              account_type INTEGER);
          CREATE TABLE contacts (
              _id INTEGER PRIMARY KEY AUTOINCREMENT,
              name_raw_contact_id INTEGER,
-             display_name TEXT,
              photo_id INTEGER,
              photo_file_id INTEGER,
              starred INTEGER NOT NULL DEFAULT 0,
@@ -55,31 +59,39 @@ pub fn make(path: &Path, people: &[(&str, &[&str])]) {
     let phone = db.last_insert_rowid();
     db.execute("INSERT INTO mimetypes (mimetype) VALUES ('vnd.android.cursor.item/name')", [])
         .expect("number the kind of a name");
-    let name = db.last_insert_rowid();
     db.execute("INSERT INTO accounts (account_name, account_type) VALUES ('local', 1)", [])
         .expect("make the account the people belong to");
 
     for (who, numbers) in people {
         db.execute(
-            "INSERT INTO contacts (display_name, contact_last_updated_timestamp) VALUES (?1, 1)",
-            [who],
+            "INSERT INTO contacts (contact_last_updated_timestamp) VALUES (1)",
+            [],
         )
         .expect("make a person");
         let contact = db.last_insert_rowid();
         db.execute(
-            "INSERT INTO raw_contacts (account_id, contact_id, account_name, account_type)
-             VALUES (1, ?1, 'local', 1)",
-            [contact],
+            "INSERT INTO raw_contacts (account_id, contact_id, account_name, account_type, display_name)
+             VALUES (1, ?1, 'local', 1, ?2)",
+            (contact, who),
         )
         .expect("make the person's own row");
         let raw = db.last_insert_rowid();
-        db.execute("INSERT INTO data (mimetype_id, raw_contact_id, is_super_primary, data1) VALUES (?1, ?2, 1, ?3)", (name, raw, who))
-            .expect("give the person a name");
+        db.execute(
+            "UPDATE contacts SET name_raw_contact_id = ?1 WHERE _id = ?2",
+            (raw, contact),
+        )
+        .expect("point the contact at the row that names it");
         for number in *numbers {
-            db.execute("INSERT INTO data (mimetype_id, raw_contact_id, data1, data4) VALUES (?1, ?2, ?3, ?3)", (phone, raw, number))
-                .expect("give the person a number");
-            db.execute("INSERT INTO phone_lookup (data1, display_name, lookup_key) VALUES (?1, ?2, ?3)", (number, who, who))
-                .expect("index the number");
+            db.execute(
+                "INSERT INTO data (mimetype_id, raw_contact_id, is_super_primary, data1) VALUES (?1, ?2, 1, ?3)",
+                (phone, raw, number),
+            )
+            .expect("give the person a number");
+            db.execute(
+                "INSERT INTO phone_lookup (data1, display_name, lookup_key) VALUES (?1, ?2, ?3)",
+                (number, who, who),
+            )
+            .expect("index the number");
         }
     }
 }
@@ -94,6 +106,7 @@ pub fn make_calls(path: &Path, calls: &[(&str, i64, i64, i64)]) {
              date INTEGER,
              duration INTEGER,
              type INTEGER,
+             deleted INTEGER NOT NULL DEFAULT 0,
              features INTEGER,
              subscription_id INTEGER);",
     )
