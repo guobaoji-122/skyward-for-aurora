@@ -23,7 +23,9 @@
 pub mod carrier;
 pub mod signal;
 
+#[cfg(target_os = "android")]
 use anyhow::{Context, Result};
+#[cfg(any(target_os = "android", test))]
 use skyward_binder::parcel::Parcel;
 
 #[cfg(target_os = "android")]
@@ -238,6 +240,7 @@ pub fn next_serial(serial: &mut i32) -> i32 {
 }
 
 /// A call to a radio method, with the interface and the number it carries.
+#[cfg(any(target_os = "android", test))]
 fn call(interface: &str, serial: i32) -> Parcel {
     let mut p = Parcel::call(interface);
     p.i32(serial);
