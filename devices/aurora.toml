@@ -273,16 +273,25 @@ optional = true
 # tells it which card it serves. Both are started here, and both are
 # optional: a phone whose radio does not come up still boots, and the
 # reason is in the log.
+#
+# These paths are the recovery's view, not the running system's: the
+# installed system is mounted at /mnt/system, so its libraries live
+# under /mnt/system/system/lib64. libvndksupport.so, which libqcrilNr.so
+# asks for, is there; /kmlibs holds the copies the recovery stages for
+# the loader. The VNDK bundle is added ahead of all of these by the
+# service runner, so libsqlite.so resolves to the VNDK copy the vendor
+# was built against rather than the framework's, which needs the i18n
+# bundle a recovery may not have opened.
 [[service]]
 path = "/vendor/bin/rmt_storage"
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"]
+libraries = ["/mnt/system/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/kmlibs"]
 user = "root"
 groups = ["root"]
 optional = true
 
 [[service]]
 path = "/vendor/bin/hw/qcrilNrd"
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"]
+libraries = ["/mnt/system/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/kmlibs"]
 user = "radio"
 groups = ["radio", "cache", "inet", "misc", "audio", "log", "readproc", "wakelock", "oem_2901", "oem_2912"]
 capabilities = ["BLOCK_SUSPEND", "NET_ADMIN", "NET_RAW"]
@@ -291,7 +300,7 @@ optional = true
 [[service]]
 path = "/vendor/bin/hw/qcrilNrd"
 args = ["-c", "2"]
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"]
+libraries = ["/mnt/system/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/kmlibs"]
 user = "radio"
 groups = ["radio", "cache", "inet", "misc", "audio", "log", "readproc", "wakelock", "oem_2901", "oem_2912"]
 capabilities = ["BLOCK_SUSPEND", "NET_ADMIN", "NET_RAW"]

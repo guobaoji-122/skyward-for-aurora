@@ -568,28 +568,35 @@ fn command(s: &Service, who: &Credentials) -> Command {
 /// itself would fail with the path already taken, so a service that wants
 /// a socket must be one that reads the descriptor instead of making its
 /// own -- which is what the phone's own programs do.
+/// The library search path for a program started through the phone's own
+/// linker. The bundles the vendor was built against lead: a vendor program
+/// asking for `libsqlite.so` must get the VNDK copy, as it does when the
+/// phone boots. The framework's copy in `/mnt/system/system/lib64` asks
+/// for `libandroidicu.so` from the i18n bundle, which a recovery may not
+/// have opened; taking it first stopped the linker long before it reached
+/// the bundle that would have worked. The phone's own partitions follow,
+/// then any other directory the service names.
+fn linker_path(libraries: &[String]) -> String {
+    let bundles: Vec<&str> = libraries.iter().map(String::as_str).filter(|dir| dir.starts_with("/apex/")).collect();
+    let mut path = bundles.join(":");
+    for dir in PHONE_LIBRARIES.split(':').chain(libraries.iter().map(String::as_str)) {
+        if path.split(':').any(|p| p == dir) {
+            continue;
+        }
+        if !path.is_empty() {
+            path.push(':');
+        }
+        path.push_str(dir);
+    }
+    path
+}
+
 fn command_with(s: &Service, who: &Credentials, runner: Option<&Path>) -> Command {
     let mut cmd = match runner {
         Some(linker) => {
-            // The phone's own linker takes the program as its first
-            // argument and has no option for the libraries: it reads
-            // LD_LIBRARY_PATH, like any other program it starts. The
-            // phone's own directories come first, and after them the
-            // bundles of shared libraries the phone opened: the vendor
-            // interface's bundle and the platform's own text handling
-            // are not in any directory of the phone's partitions, and a
-            // program that asks for one of them finds nothing without
-            // them.
-            let mut path = String::from(PHONE_LIBRARIES);
-            for dir in &s.libraries {
-                if !path.split(':').any(|p| p == dir) {
-                    path.push(':');
-                    path.push_str(dir);
-                }
-            }
             let mut c = Command::new(linker);
             c.arg(&s.path).args(&s.args);
-            c.env("LD_LIBRARY_PATH", path);
+            c.env("LD_LIBRARY_PATH", linker_path(&s.libraries));
             c
         }
         None => {
@@ -784,7 +791,7 @@ fn wait_for(pid: u32) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_program, PHONE_LIBRARIES};
+    use super::{is_program, linker_path, PHONE_LIBRARIES};
 
     fn write(name: &str, head: &[u8]) -> std::path::PathBuf {
         let at = std::env::temp_dir().join(name);
@@ -832,5 +839,26 @@ mod tests {
         // The library of the loader lives in a folder of its own beside the
         // others, and a linker that is not given it says so.
         assert!(PHONE_LIBRARIES.contains("/bootstrap:"), "{PHONE_LIBRARIES}");
+    }
+
+    #[test]
+    fn the_vendor_bundle_leads_the_system_libraries() {
+        // libsqlite.so from the system needs the i18n bundle; the VNDK copy
+        // does not. Whichever copy the linker finds first is the one that
+        // decides whether the radio can start at all.
+        let libs = vec![
+            "/mnt/system/system/lib64".to_string(),
+            "/vendor/lib64".to_string(),
+            "/apex/com.android.vndk.v34/lib64".to_string(),
+            "/apex/com.android.i18n/lib64".to_string(),
+        ];
+        let path = linker_path(&libs);
+        let at: Vec<&str> = path.split(':').collect();
+        let vndk = at.iter().position(|d| *d == "/apex/com.android.vndk.v34/lib64").expect("the VNDK bundle is there");
+        let system = at.iter().position(|d| *d == "/mnt/system/system/lib64").expect("the system's libraries are there");
+        assert!(vndk < system, "the VNDK bundle leads: {path}");
+        for dir in PHONE_LIBRARIES.split(':').chain(libs.iter().map(String::as_str)) {
+            assert_eq!(at.iter().filter(|d| **d == dir).count(), 1, "{dir} is named once: {path}");
+        }
     }
 }
