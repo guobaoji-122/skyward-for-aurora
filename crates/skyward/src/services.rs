@@ -617,7 +617,7 @@ fn command_with(s: &Service, who: &Credentials, runner: Option<&Path>) -> Comman
                 // itself is kept alive by forgetting it: the program has
                 // the descriptor now.
                 unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
-                cmd.env(&format!("ANDROID_SOCKET_{}", name.replace('-', "_")), fd.to_string());
+                cmd.env(format!("ANDROID_SOCKET_{}", name.replace('-', "_")), fd.to_string());
                 std::mem::forget(listener);
                 let _ = skyward_sys::kmsg(&format!("socket {name} is listening on descriptor {fd}"));
             }
