@@ -270,7 +270,10 @@ pub fn status_bar(c: &mut Canvas, t: &Theme, f: &Fonts, bar: &Bar, ink: Rgba) {
         left = cell_mark(c, t, f, cell, left - gap, cy, ink);
     }
     if let Some(w) = &bar.wlan {
-        left = wlan_mark(c, t, w, left - gap, cy, ink);
+        // The fan's arrows stand in from the icon's right edge, so the room
+        // the marks leave between them is in the icon's own place: its edge
+        // is what stands short of the next, not the gap the others leave.
+        left = wlan_mark(c, t, w, left, cy, ink);
     }
     if let Some(open) = bar.data {
         let (art, ox, oy, w) = lock_mark(t, open, left - gap, cy, ink);
@@ -479,12 +482,15 @@ fn lock_mark(t: &Theme, open: bool, right: f32, cy: f32, ink: Rgba) -> (Canvas, 
 // and the arrows' tips and bases from the fan's point, either half of their
 // width, and how round their tips and other corners are.
 const ARROWS_IN_DP: f32 = 5.57;
-const FAN_LEFT_OF_ARROWS_DP: f32 = 7.0;
+const FAN_LEFT_OF_ARROWS_DP: f32 = 7.0867;
 const FAN_POINT_DP: f32 = 6.06;
 const FAN_SLICE_DP: f32 = 3.81;
 const FAN_INNER_DP: (f32, f32) = (5.49, 7.83);
 const FAN_OUTER_DP: (f32, f32) = (9.51, 11.83);
-const FAN_HALF: f32 = std::f32::consts::FRAC_PI_4;
+/// How far either side of straight up the fan opens: the stock's fan is
+/// narrower than a quarter of a circle, so that the arcs stand at 42
+/// degrees from the middle and the icon keeps the width the stock gives.
+const FAN_HALF: f32 = 0.73304;
 const ARROW_UP_DP: (f32, f32) = (-5.46, -2.84);
 const ARROW_DOWN_DP: (f32, f32) = (-2.09, 0.58);
 const ARROW_HALF_DP: f32 = 1.83;

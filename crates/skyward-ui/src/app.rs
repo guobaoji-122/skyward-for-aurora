@@ -8778,8 +8778,9 @@ mod tests {
         assert_eq!((none.slot, none.temp), (None, None), "a phone without slots or a fuel gauge");
     }
 
-    /// A screen the home page's rows fit on with a little room to spare.
-    const SNUG: u32 = 3000;
+    /// A screen the home page's rows fit on with a little room to spare,
+    /// and an update notice pushes them off it.
+    const SNUG: u32 = 3600;
 
     #[test]
     fn a_home_page_grown_by_an_update_notice_scrolls_down_to_its_last_row() {
@@ -10175,7 +10176,7 @@ mod tests {
         press(&mut app, Key::VolumeDown, 0);
         assert_eq!(lit(&mut app, &f, &i), Some(Stop::Hit(Action::Open(Screen::About))));
         press(&mut app, Key::VolumeDown, 0);
-        assert_eq!(lit(&mut app, &f, &i), Some(Stop::Hit(Action::Open(Screen::Install))));
+        assert_eq!(lit(&mut app, &f, &i), Some(Stop::Hit(Action::Open(Screen::Contacts))));
         press(&mut app, Key::VolumeUp, 0);
         assert_eq!(lit(&mut app, &f, &i), Some(Stop::Hit(Action::Open(Screen::About))));
         press(&mut app, Key::VolumeUp, 0);
@@ -10432,10 +10433,10 @@ mod tests {
         app.tick(REPEAT_DELAY_MS);
         assert_eq!(lit(&mut app, &f, &i), Some(Stop::Hit(Action::Open(Screen::About))));
         app.tick(REPEAT_DELAY_MS + REPEAT_MS);
-        assert_eq!(lit(&mut app, &f, &i), Some(Stop::Hit(Action::Open(Screen::Install))));
+        assert_eq!(lit(&mut app, &f, &i), Some(Stop::Hit(Action::Open(Screen::Contacts))));
         app.key_up(Key::VolumeDown, REPEAT_DELAY_MS + REPEAT_MS + 10);
         app.tick(REPEAT_DELAY_MS + REPEAT_MS * 5);
-        assert_eq!(lit(&mut app, &f, &i), Some(Stop::Hit(Action::Open(Screen::Install))), "let go, it stops");
+        assert_eq!(lit(&mut app, &f, &i), Some(Stop::Hit(Action::Open(Screen::Contacts))), "let go, it stops");
     }
 
     #[test]
