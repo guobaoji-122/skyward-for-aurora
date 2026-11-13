@@ -2249,6 +2249,7 @@ dependencies = [
  "skyward-binder",
  "skyward-block",
  "skyward-config",
+ "skyward-contacts",
  "skyward-crypto",
  "skyward-files",
  "skyward-info",
@@ -2257,6 +2258,7 @@ dependencies = [
  "skyward-modules",
  "skyward-mtp",
  "skyward-net",
+ "skyward-radio",
  "skyward-sys",
  "skyward-systems",
  "skyward-ui",
@@ -2480,6 +2482,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "skyward-radio"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "skyward-binder",
+]
+
+[[package]]
 name = "skyward-sys"
 version = "0.2.0"
 dependencies = [
@@ -2535,6 +2546,7 @@ dependencies = [
  "proc-macro2",
  "serde",
  "serde_json",
+ "skyward-contacts",
  "skyward-info",
  "skyward-install",
  "skyward-net",

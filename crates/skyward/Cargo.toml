@@ -19,6 +19,7 @@ skyward-info = { path = "../skyward-info" }
 skyward-install = { path = "../skyward-install" }
 skyward-sys = { path = "../skyward-sys" }
 skyward-lp = { path = "../skyward-lp" }
+skyward-contacts = { path = "../skyward-contacts" }
 zip = { version = "8.6.0", default-features = false }
 
 [dev-dependencies]
@@ -38,4 +39,5 @@ skyward-ui = { path = "../skyward-ui" }
 skyward-mtp = { path = "../skyward-mtp" }
 skyward-systems = { path = "../skyward-systems" }
 skyward-net = { path = "../skyward-net" }
+skyward-radio = { path = "../skyward-radio" }
 ureq = { version = "=3.5.0", default-features = false }

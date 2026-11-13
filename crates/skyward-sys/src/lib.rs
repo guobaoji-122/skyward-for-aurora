@@ -454,16 +454,38 @@ pub fn log_disk_mounted() -> bool {
 /// convenience the business does not stand on: its failing — a full disk,
 /// a disk gone — ends its part in the session, and does not fail the call.
 pub fn kmsg(line: &str) -> Result<()> {
-    let mut f = OpenOptions::new().write(true).open("/dev/kmsg")?;
-    f.write_all(format!("<6>skyward: {line}\n").as_bytes())?;
+    // The kernel refuses a write to /dev/kmsg longer than about a thousand
+    // bytes with EINVAL. A diagnostic that lists every path a database was
+    // looked for is longer than that, and used to take the whole recovery
+    // down when it was written with `?`. Split long lines on character
+    // boundaries, and keep a line break out of what the kernel reads: one
+    // write is one record there.
+    const CHUNK: usize = 800;
+    let flat = line.replace('\n', " ").replace('\r', " ");
+    if let Ok(mut f) = OpenOptions::new().write(true).open("/dev/kmsg") {
+        let mut part = String::new();
+        for ch in flat.chars() {
+            if part.len() + ch.len_utf8() > CHUNK {
+                // A log that would not take this line is no reason to end
+                // the work that wrote it.
+                let _ = write!(f, "<6>skyward: {part}\n");
+                part.clear();
+            }
+            part.push(ch);
+        }
+        if !part.is_empty() || flat.is_empty() {
+            let _ = write!(f, "<6>skyward: {part}\n");
+        }
+    }
     // The stamp is made once, so both files say the same thing. A clock that
     // cannot be read leaves the kernel log alone rather than failing the
     // call: what was written there is already written.
     let Ok(secs) = since_boot().map(|d| d.as_secs_f64()) else { return Ok(()) };
-    let stamped = format!("[{secs:>12.6}] {line}\n");
+    let stamped = format!("[{secs:>12.6}] {flat}\n");
     if let Some(kept) = KEPT.get() {
-        let mut kept = kept.lock().expect("nothing panics while writing the log");
-        write!(kept, "{stamped}").with_context(|| format!("write {LOG}"))?;
+        if let Ok(mut kept) = kept.lock() {
+            let _ = write!(kept, "{stamped}");
+        }
     }
     if let Some((mut lasting, _)) = lasting_log() {
         if LONG_BYTES.fetch_add(stamped.len() as u64, Ordering::Relaxed) >= SESSION_LOG_BUDGET {

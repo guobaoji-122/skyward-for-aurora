@@ -18,6 +18,7 @@ use crate::term::{self, Term};
 use crate::theme::Theme;
 use crate::tr;
 use crate::icons::{self, Icon};
+use crate::ime;
 use crate::widgets::{self, Caption, Detail, Fact, Outline, Row, Spec, SystemCard, SystemMark, Tone, Trail};
 use skyward_info::{DeviceInfo, VERSION};
 use skyward_install::{Outcome, Reflash, Refusal, Stage};
@@ -113,6 +114,10 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::WlanPassword => wlan_password(cx),
         Screen::WlanNetwork => wlan_network(cx),
         Screen::WlanAdd => wlan_add(cx),
+        Screen::Contacts => contacts(cx),
+        Screen::Contact(i) => contact(cx, i),
+        Screen::Calls => calls(cx),
+        Screen::Signal => signal(cx),
     }
 }
 
@@ -311,6 +316,19 @@ pub fn home(cx: &Ctx) -> Frame {
         out.extend(hits(&first.rows, &opens));
         y = first.bottom + t.m.card_gap;
     }
+    // The people the phone knows and the calls it made sit first among the
+    // things opened from home: neither hides two pages down inside Advanced.
+    let people = widgets::list(&mut c, t, f, y, &[
+        Row::new(l.pick(CONTACTS)).icon(BLUE, Icon::Phone),
+        Row::new(l.pick(CALL_LOG)).icon(GREEN, Icon::Clock),
+        Row::new(l.pick(SIGNAL)).icon(BLUE, Icon::Clock),
+    ]);
+    out.extend(hits(&people.rows, &[
+        Action::Open(Screen::Contacts),
+        Action::Open(Screen::Calls),
+        Action::Open(Screen::Signal),
+    ]));
+    y = people.bottom + t.m.card_gap;
     let tools = widgets::list(&mut c, t, f, y, &[
         Row::new(l.pick(["安装", "安裝", "Install"])).icon(GREEN, Icon::Install),
         Row::new(l.pick(["备份", "備份", "Backup"])).icon(BLUE, Icon::Backup),
@@ -810,12 +828,11 @@ fn code(cx: &Ctx, mut c: Canvas, user: u32, keys: Keys, checking: bool) -> Frame
     let mut pattern = None;
     let bottom = match keys {
         Keys::Letters => {
-            let top = m.h as f32 - widgets::keyboard_height(t);
-            let caps = widgets::keyboard(&mut c, t, f, l, top, s.layer, s.key_held(), l.pick(DECRYPT));
-            if !checking {
-                out.extend(caps.into_iter().map(|(rect, cap)| Hit { rect, action: Action::Type(cap) }));
-            }
-            top
+            // The keyboard is drawn either way, but answers nothing while
+            // the code is being checked.
+            let mut sink = Vec::new();
+            let target = if checking { &mut sink } else { &mut out };
+            ime_area(&mut c, t, f, s, l.pick(DECRYPT), target)
         }
         Keys::Pattern => {
             let span = m.dp(300.0);
@@ -1850,11 +1867,40 @@ pub fn wipe(cx: &Ctx) -> Frame {
 
 /// A page laid out above the on-screen keyboard: where the keyboard's top
 /// is, and its keys as touch targets.
-fn keyboard_hits(c: &mut Canvas, t: &Theme, f: &Fonts, s: &State, enter: &str, out: &mut Vec<Hit>) -> f32 {
-    let top = t.m.h as f32 - widgets::keyboard_height(t);
-    let keys = widgets::keyboard(c, t, f, s.lang, top, s.layer, s.key_held(), enter);
-    out.extend(keys.into_iter().map(|(rect, cap)| Hit { rect, action: Action::Type(cap) }));
-    top
+/// Where the keyboard begins. The Chinese keys carry a pinyin bar over
+/// them, so the pages above them give way to it.
+pub fn ime_top(t: &Theme, s: &State) -> f32 {
+    let kb = widgets::keyboard_height(t);
+    if s.ime.nine {
+        t.m.h as f32 - kb - widgets::ime_bar_height(t) - t.m.dp(8.0)
+    } else {
+        t.m.h as f32 - kb
+    }
+}
+
+/// The keyboard at the foot of the page: the Latin keys, or the pinyin bar
+/// and the nine keys of Chinese. One input method for the whole recovery,
+/// switched from either side, and the same on every page that takes text.
+fn ime_area(c: &mut Canvas, t: &Theme, f: &Fonts, s: &State, enter: &str, out: &mut Vec<Hit>) -> f32 {
+    if s.ime.nine {
+        let m = &t.m;
+        let bar_h = widgets::ime_bar_height(t);
+        let bar_top = m.h as f32 - widgets::keyboard_height(t) - bar_h - m.dp(8.0);
+        let bar = Rect::new(m.margin, bar_top, m.w as f32 - m.margin * 2.0, bar_h);
+        ime_bar(
+            c, t, f, s.lang, bar, &s.ime.digits, &s.ime.spelling, &s.ime.choices, s.ime.page,
+            s.ime.spellings.len(), s.ime.spell_at, out,
+        );
+        let top = m.h as f32 - widgets::keyboard_height(t);
+        let keys = widgets::nine_keyboard(c, t, f, s.lang, top, s.nine_held(), enter);
+        out.extend(keys.into_iter().map(|(rect, cap)| Hit { rect, action: Action::Nine(cap) }));
+        bar_top
+    } else {
+        let top = t.m.h as f32 - widgets::keyboard_height(t);
+        let keys = widgets::keyboard(c, t, f, s.lang, top, s.layer, s.key_held(), enter);
+        out.extend(keys.into_iter().map(|(rect, cap)| Hit { rect, action: Action::Type(cap) }));
+        top
+    }
 }
 
 /// Finding a feature or partition: the field where the title would be, the
@@ -1870,7 +1916,7 @@ pub fn search(cx: &Ctx) -> Frame {
     widgets::cancel_button(&mut c, t, cancel);
     out.push(Hit { rect: cancel, action: Action::CloseSearch });
     let top = field.field.y + field.field.h + m.dp(12.0);
-    let kb_top = m.h as f32 - widgets::keyboard_height(t);
+    let kb_top = ime_top(t, s);
     if s.search.trim().is_empty() {
         let how = l.pick([
             "输入功能或分区名称，支持拼音全拼和首字母，例如输入 bf 可找到「备份」。",
@@ -1893,7 +1939,7 @@ pub fn search(cx: &Ctx) -> Frame {
         }
     }
     let find = l.pick(["搜索", "搜尋", "Search"]);
-    keyboard_hits(&mut c, t, f, s, find, &mut out);
+    ime_area(&mut c, t, f, s, find, &mut out);
     if let Some(rect) = field.clear {
         out.push(Hit { rect, action: Action::ClearSearch });
     }
@@ -3573,7 +3619,7 @@ pub fn wlan_password(cx: &Ctx) -> Frame {
     let (y, caret) = widgets::text_field(&mut c, t, f, y, &shown);
     let show = widgets::list(&mut c, t, f, y + t.m.card_gap, &[Row::new(l.pick(SHOW_PASSWORD)).trail(Trail::Switch(s.show_password))]);
     out.extend(hits(&show.rows, &[Action::Toggle(Switch::ShowPassword)]));
-    keyboard_hits(&mut c, t, f, s, l.pick(CONNECT_KEY), &mut out);
+    ime_area(&mut c, t, f, s, l.pick(CONNECT_KEY), &mut out);
     Frame { caret: Some(caret), ..Frame::new(t, c, out, l.pick(["输入密码", "輸入密碼", "Enter password"]), top) }
 }
 
@@ -3608,7 +3654,7 @@ pub fn wlan_add(cx: &Ctx) -> Frame {
         let show = widgets::list(&mut c, t, f, below + m.card_gap, &[Row::new(l.pick(SHOW_PASSWORD)).trail(Trail::Switch(s.show_password))]);
         out.extend(hits(&show.rows, &[Action::Toggle(Switch::ShowPassword)]));
     }
-    keyboard_hits(&mut c, t, f, s, l.pick(CONNECT_KEY), &mut out);
+    ime_area(&mut c, t, f, s, l.pick(CONNECT_KEY), &mut out);
     if !a.choosing {
         return Frame { caret: Some(caret), ..Frame::new(t, c, out, l.pick(ADD_NETWORK), top) };
     }
@@ -3889,7 +3935,7 @@ pub fn rename(cx: &Ctx) -> Frame {
     let top = t.m.content_top;
     let (y, caret) = widgets::text_field(&mut c, t, f, top, &s.new_name);
     widgets::footnote(&mut c, t, f, y, l.pick(["名称不能包含\"/\"。点击「完成」保存。", "名稱不能包含「/」。點選「完成」儲存。", "A name can't hold “/”. Tap Done to save it."]));
-    keyboard_hits(&mut c, t, f, s, l.pick(DONE), &mut out);
+    ime_area(&mut c, t, f, s, l.pick(DONE), &mut out);
     Frame { caret: Some(caret), ..Frame::new(t, c, out, l.pick(RENAME), top) }
 }
 
@@ -4018,7 +4064,7 @@ pub fn terminal(cx: &Ctx) -> Frame {
     let mut c = page(cx);
     let mut out = Vec::new();
     let top = t.m.content_top;
-    keyboard_hits(&mut c, t, f, s, s.lang.pick(["回车", "Enter", "Enter"]), &mut out);
+    ime_area(&mut c, t, f, s, s.lang.pick(["回车", "Enter", "Enter"]), &mut out);
     let l = term::layout(t, f, top);
     term::draw(&mut c, t, f, &l, cx.term);
     let held = cx.term.is_some_and(|term| term.ctrl);
@@ -4035,7 +4081,7 @@ pub fn editor(cx: &Ctx) -> Frame {
     let ed = s.editor.as_ref().expect("the editor page shows a file");
     let mut c = page(cx);
     let mut out = Vec::new();
-    keyboard_hits(&mut c, t, f, s, s.lang.pick(["换行", "換行", "Return"]), &mut out);
+    ime_area(&mut c, t, f, s, s.lang.pick(["换行", "換行", "Return"]), &mut out);
     editor::caption(&mut c, t, f, &ed.path);
     let l = editor::layout(t, f);
     let caret = editor::draw(&mut c, t, f, &l, ed);
@@ -4597,6 +4643,427 @@ pub fn unhandled(cx: &Ctx) -> Frame {
     let y = widgets::section(&mut c, t, f, y, l.pick(ACTIONS));
     afterwards(&mut c, t, f, l, y, true, &mut out);
     Frame { back: false, ..Frame::new(t, c, out, l.pick(["无法处理该请求", "無法處理這項要求", "Can't handle the request"]), top) }
+}
+
+/// The phone's contacts, read from the provider's own database: a search
+/// field that filters them by name or number, the matching people below it,
+/// and the keyboard to type the search with. Tapping or keying a person
+/// opens their details.
+const CONTACTS: Text = ["联系人", "聯絡人", "Contacts"];
+const CONTACT_HINT: Text = ["搜索姓名或号码", "搜尋姓名或號碼", "Search name or number"];
+const NO_CONTACTS: Text = ["没有联系人", "沒有聯絡人", "No contacts"];
+
+/// The indices into `s.all` the search shows. A name answers as it is
+/// written, by the sound of its characters, by their initials, or by the
+/// digits those spell on the nine keys; a number answers by any part of it,
+/// with the country code and punctuation taken off. While a sound is being
+/// spelled it is the query, so the people whose names it spells show before
+/// any character is chosen.
+pub fn filtered(s: &crate::app::ContactsPage, digits: &str) -> Vec<usize> {
+    let q = if !digits.trim().is_empty() {
+        digits.trim().to_lowercase()
+    } else {
+        s.query.trim().to_lowercase()
+    };
+    if q.is_empty() {
+        return (0..s.all.len()).collect();
+    }
+    let wanted = ime::number(&q);
+    s.all
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            ime::matches_name(&c.name, &q)
+                || c.numbers.iter().any(|n| {
+                    n.to_lowercase().contains(&q) || (!wanted.is_empty() && ime::number(n).contains(&wanted))
+                })
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Every row of the contacts and call pages is a title over one line of
+/// detail, so one measured height places them all. Working it out from the
+/// type metrics alone keeps a long list from measuring hundreds of wrapped
+/// strings on every frame.
+fn uniform_pitch(t: &Theme, f: &Fonts) -> f32 {
+    let m = &t.m;
+    let (tt, tb) = f.heading.ink(m.row_title_px);
+    let (st, sb) = f.body.ink(m.sub_px);
+    let block = (tb - tt) + m.sub_gap + (sb - st);
+    (block + m.row_pad_v * 2.0).max(m.row_h)
+}
+
+/// The rows a finger has brought into view. Only these are built and drawn.
+fn visible_rows(scroll: usize, total: usize, room: f32, pitch: f32) -> (usize, usize) {
+    if total == 0 {
+        return (0, 0);
+    }
+    let start = scroll.min(total - 1);
+    let count = ((room / pitch.max(1.0)).ceil() as usize + 2).min(total - start);
+    (start, count.max(1))
+}
+
+/// Keep a title or detail to one line, so a row never grows taller than the
+/// uniform pitch and the list stays aligned while it scrolls.
+fn brief(text: &str, most: usize) -> String {
+    text.chars().take(most).collect()
+}
+
+/// The pinyin bar directly above the keys, as a system input method has it:
+/// the sound being spelled, then whole words and characters sized to their
+/// own widths, the first of them highlighted, then the page turns. The
+/// sound itself can be touched: the same keys spell several of them.
+#[allow(clippy::too_many_arguments)]
+fn ime_bar(
+    c: &mut Canvas,
+    t: &Theme,
+    f: &Fonts,
+    l: Lang,
+    at: Rect,
+    digits: &str,
+    said: &str,
+    choices: &[String],
+    page: usize,
+    spellings: usize,
+    spell_at: usize,
+    out: &mut Vec<Hit>,
+) {
+    let m = &t.m;
+    c.fill_round_rect(at.x, at.y, at.w, at.h, m.dp(10.0), Tone::page(t).card);
+    let cy = at.y + at.h / 2.0;
+    let (label_w, nav_w) = (m.dp(150.0), m.dp(34.0));
+    let sound = if digits.is_empty() {
+        l.pick(["拼音", "拼音", "Pinyin"]).to_string()
+    } else if spellings > 1 {
+        format!("{} {}/{}", brief(said, 12), spell_at + 1, spellings)
+    } else {
+        format!("{}|", brief(said, 14))
+    };
+    c.text_center(&f.body, &brief(&sound, 18), at.x + label_w / 2.0, cy, m.sub_px, t.pal.accent);
+    if spellings > 1 {
+        // The sound can be turned to another the same keys spell.
+        out.push(Hit { rect: Rect::new(at.x, at.y, label_w, at.h), action: Action::TurnPinyin });
+    }
+    let right = at.x + at.w - nav_w * 2.0;
+    let gap = m.dp(13.0);
+    let mut x = at.x + label_w;
+    let first = page * ime::CHOICES;
+    for k in 0..ime::CHOICES {
+        let Some(word) = choices.get(first + k) else { break };
+        let w = c.text_width(&f.heading, word, m.row_title_px) + gap * 2.0;
+        if x + w > right {
+            break;
+        }
+        if k == 0 {
+            c.fill_round_rect(x, at.y + m.dp(5.0), w, at.h - m.dp(10.0), m.dp(8.0), t.pal.accent.with_alpha(30));
+        }
+        // The first candidate is the one a finger takes without looking:
+        // it keeps the ink of the others over a wash of colour.
+        c.text_center(&f.heading, word, x + w / 2.0, cy, m.row_title_px, t.pal.text);
+        out.push(Hit { rect: Rect::new(x, at.y, w, at.h), action: Action::PickCharacter(k) });
+        x += w;
+    }
+    let nav_x = at.x + at.w - nav_w * 2.0;
+    for (k, by) in [(0, -1i8), (1, 1i8)] {
+        let r = Rect::new(nav_x + k as f32 * nav_w, at.y, nav_w, at.h);
+        let arrow = if by < 0 { "<" } else { ">" };
+        c.text_center(&f.heading, arrow, r.x + r.w / 2.0, cy, m.sub_px, t.pal.accent);
+        out.push(Hit { rect: r, action: Action::TurnCharacters(by) });
+    }
+}
+
+/// The small key beside the field that changes the keyboard between Latin
+/// letters and the nine keys.
+fn ime_key(c: &mut Canvas, t: &Theme, f: &Fonts, s: &State, at: Rect) {
+    let words = if s.ime.nine { "En" } else { s.lang.pick(["中", "中", "中"]) };
+    c.fill_round_rect(at.x, at.y, at.w, at.h, t.m.dp(8.0), t.pal.card);
+    c.text_center(&f.heading, words, at.x + at.w / 2.0, at.y + at.h / 2.0, t.m.sub_px, t.pal.accent);
+}
+
+/// The contacts list: the search field under the title, the keyboard, and
+/// the people matching the search as a list above the keyboard, each a touch
+/// or a key that opens that person.
+pub fn contacts(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let m = &t.m;
+    let mut c = page(cx);
+    let mut out = Vec::new();
+    let top = m.content_top;
+    let h = m.search_h;
+    let x = m.margin;
+    let w = m.w as f32 - m.margin * 2.0;
+    let cy = top + h / 2.0;
+    let toggle_w = m.dp(58.0);
+    let gap = m.dp(8.0);
+    let toggle = Rect::new(x + w - toggle_w, cy - m.dp(20.0), toggle_w, m.dp(40.0));
+    let field = widgets::search_field(&mut c, t, f, x, w - toggle_w - gap, cy, &s.contacts.query, l.pick(CONTACT_HINT));
+    ime_key(&mut c, t, f, s, toggle);
+    out.push(Hit { rect: toggle, action: Action::ToggleIme });
+    if let Some(rect) = field.clear {
+        out.push(Hit { rect, action: Action::ClearContacts });
+    }
+    // The keyboard carries the pinyin bar when the Chinese keys are
+    // showing, so the people fill the space between it and the search field.
+    let list_bottom = ime_top(t, s);
+    let list_top = top + h + m.after_search;
+    let room = (list_bottom - list_top).max(0.0);
+    let shown = filtered(&s.contacts, &s.ime.digits);
+    let mut pitch = None;
+    if shown.is_empty() {
+        // A reading that failed says why, instead of looking like a phone
+        // with no people on it. The kernel log keeps the whole story; only
+        // the beginning fits here.
+        let why = s.contacts.note.as_deref().unwrap_or(l.pick(NO_CONTACTS));
+        let short_why: String = why.chars().take(150).collect();
+        let end = widgets::footnote(&mut c, t, f, list_top, &short_why);
+        let bh = m.dp(48.0);
+        if end + m.card_gap + bh <= list_bottom {
+            let again = l.pick(["重新读取", "重新讀取", "Read again"]);
+            let rect = widgets::button(&mut c, t, f, end + m.card_gap, again);
+            out.push(Hit { rect, action: Action::RereadContacts });
+        }
+    } else {
+        // Only the rows in view are built and measured: hundreds of people
+        // cost no more than a screenful, and a finger takes them all down.
+        let p = uniform_pitch(t, f);
+        let (start, count) = visible_rows(s.contacts.scroll, shown.len(), room, p);
+        let texts: Vec<(String, String)> = (start..start + count)
+            .map(|k| {
+                let person = &s.contacts.all[shown[k]];
+                let sub = person.numbers.first().map(|n| n.as_str()).unwrap_or("");
+                (brief(&person.name, 18), brief(sub, 26))
+            })
+            .collect();
+        let rows: Vec<Row> = texts
+            .iter()
+            .map(|(title, detail)| Row::new(title.as_str()).icon(BLUE, Icon::Phone).subtitle(detail.as_str()))
+            .collect();
+        let block = widgets::list(&mut c, t, f, list_top, &rows);
+        out.extend(
+            block
+                .rows
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.y + r.h > list_top && r.y < list_bottom)
+                .map(|(k, &rect)| Hit { rect, action: Action::OpenContact(start + k) }),
+        );
+        pitch = Some(p);
+    }
+    let find = l.pick(["搜索", "搜尋", "Search"]);
+    ime_area(&mut c, t, f, s, find, &mut out);
+    let scrollback = pitch.map(|p| (Rect::new(0.0, list_top, m.w as f32, room.max(1.0)), p));
+    Frame { scrollback, caret: Some(field.caret), ..Frame::new(t, c, out, l.pick(CONTACTS), top) }
+}
+
+/// One contact: their name, how many numbers the phone has for them, and
+/// each number as a row, framed by the account-style card the details pages
+/// use.
+pub fn contact(cx: &Ctx, i: usize) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = long_page(cx);
+    let top = t.m.content_top;
+    let Some(person) = s.contacts.all.get(i) else {
+        return Frame::new(t, c, Vec::new(), l.pick(CONTACTS), top);
+    };
+    let sub: String = match person.numbers.len() {
+        0 => l.pick(["无号码", "無號碼", "No number"]).to_string(),
+        1 => l.pick(["1 个号码", "1 個號碼", "1 number"]).to_string(),
+        n => tr!(l, "{n} 个号码", "{n} 個號碼", "{n} numbers"),
+    };
+    let rows: Vec<Row> = person.numbers.iter().map(|n| Row::new(n).icon(BLUE, Icon::Phone)).collect();
+    widgets::device_card(&mut c, t, f, top, &person.name, &sub, &rows);
+    Frame::new(t, c, Vec::new(), l.pick(CONTACTS), top)
+}
+
+/// The calls the provider recorded, most recent first, named where the
+/// contacts give the number a name.
+const CALL_LOG: Text = ["通话记录", "通話記錄", "Call log"];
+const NO_CALLS: Text = ["没有通话记录", "沒有通話記錄", "No calls"];
+const UNKNOWN_NUMBER: Text = ["未知号码", "未知號碼", "Unknown number"];
+const INCOMING_CALL: Text = ["来电", "來電", "Incoming"];
+const OUTGOING_CALL: Text = ["去电", "去電", "Outgoing"];
+const MISSED_CALL: Text = ["未接", "未接", "Missed"];
+const VOICEMAIL_CALL: Text = ["语音信箱", "語音信箱", "Voicemail"];
+
+/// A call's time is milliseconds since the epoch. Recovery has no timezone
+/// of its own, so the row says UTC rather than pretending to know one.
+fn call_when(at: i64) -> String {
+    let secs = at.div_euclid(1000);
+    let days = secs.div_euclid(86_400);
+    let within = secs.rem_euclid(86_400);
+    // Civil date from a day count, with the epoch shifted to 1970-01-01.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    if month <= 2 {
+        year += 1;
+    }
+    format!("{year:04}-{month:02}-{day:02} {h:02}:{m:02} UTC",
+            h = within / 3600, m = (within % 3600) / 60)
+}
+
+fn call_length(seconds: i64) -> String {
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+/// The name of the other end of a call. The runtime gives every call its
+/// name when the two readings arrive, so a page only reads that answer and
+/// never compares the number against the whole phonebook again.
+fn caller<'a>(l: Lang, call: &'a skyward_contacts::Call) -> &'a str {
+    if !call.name.is_empty() {
+        return call.name.as_str();
+    }
+    if !call.number.is_empty() {
+        return call.number.as_str();
+    }
+    l.pick(UNKNOWN_NUMBER)
+}
+
+fn call_kind(l: Lang, kind: i64) -> (&'static str, Rgba) {
+    match kind {
+        skyward_contacts::INCOMING => (l.pick(INCOMING_CALL), BLUE),
+        skyward_contacts::OUTGOING => (l.pick(OUTGOING_CALL), GREEN),
+        skyward_contacts::MISSED => (l.pick(MISSED_CALL), RED),
+        _ => (l.pick(VOICEMAIL_CALL), PURPLE),
+    }
+}
+
+/// The call log: the most recent calls, the name or number at the other end,
+/// and when, what kind and how long each was.
+pub fn calls(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let m = &t.m;
+    let top = m.content_top;
+    let mut c = page(cx);
+    if s.calls.is_empty() {
+        let why = s.calls_note.as_deref().unwrap_or(l.pick(NO_CALLS));
+        let short_why: String = why.chars().take(150).collect();
+        let end = widgets::footnote(&mut c, t, f, top, &short_why);
+        let mut out = Vec::new();
+        let bh = m.dp(48.0);
+        if end + m.card_gap + bh <= m.h as f32 {
+            let again = l.pick(["重新读取", "重新讀取", "Read again"]);
+            let rect = widgets::button(&mut c, t, f, end + m.card_gap, again);
+            out.push(Hit { rect, action: Action::RereadCalls });
+        }
+        return Frame::new(t, c, out, l.pick(CALL_LOG), top);
+    }
+    let out = Vec::new();
+    // Only the calls in view are built and measured. All of them keep one
+    // line of detail, so a uniform pitch places the whole log and a finger
+    // takes the page through every call the provider recorded.
+    let room = (m.h as f32 - m.margin - top).max(0.0);
+    let pitch = uniform_pitch(t, f);
+    let (start, count) = visible_rows(s.calls_scroll, s.calls.len(), room, pitch);
+    let texts: Vec<(String, String, i64)> = (start..start + count)
+        .map(|i| {
+            let call = &s.calls[i];
+            let (kind, _) = call_kind(l, call.kind);
+            let when = format!("{} · {} · {}", call_when(call.at), kind, call_length(call.seconds));
+            let name = caller(l, call);
+            let note = if !call.number.is_empty() && name != call.number.as_str() {
+                format!("{} · {}", call.number, when)
+            } else {
+                when
+            };
+            (brief(name, 18), brief(&note, 30), call.kind)
+        })
+        .collect();
+    let rows: Vec<Row> = texts
+        .iter()
+        .map(|(title, note, kind)| {
+            let (_, tone) = call_kind(l, *kind);
+            Row::new(title.as_str()).icon(tone, Icon::Clock).subtitle(note.as_str())
+        })
+        .collect();
+    // The rows in view start at the top of the page: the ones a finger has
+    // taken past are above it, and the rest are below.
+    widgets::list(&mut c, t, f, top, &rows);
+    let scrollback = Some((Rect::new(0.0, top, m.w as f32, room.max(1.0)), pitch));
+    Frame { scrollback, ..Frame::new(t, c, out, l.pick(CALL_LOG), top) }
+}
+
+/// What the phone's radio is doing: whether it has come up, which cards it
+/// serves, and what it says of itself.
+const SIGNAL: Text = ["信号", "信號", "Signal"];
+const NO_SIGNAL: Text = ["没有信号", "沒有信號", "No signal"];
+
+/// The phone's radio, as the runtime found it: the cards it serves, what
+/// each card's radio is called, and what it says of itself.
+///
+/// The radio of a modern phone answers through a callback object rather
+/// than at once, so what can be shown here is whether the radio's own
+/// services have registered at all. Whether there is a network on the
+/// card is what the radio would say later, through that object.
+pub fn signal(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let m = &t.m;
+    let top = m.content_top;
+    let mut c = page(cx);
+    let mut out = Vec::new();
+
+    // The rows borrow their words, so the words are kept beside them.
+    let mut titles: Vec<String> = Vec::new();
+    let mut subtitles: Vec<String> = Vec::new();
+    let mut icons: Vec<(Rgba, Icon)> = Vec::new();
+
+    // The programs the radio is made of come first: a radio that has not
+    // come up has failed in one of them, and which one says where to look.
+    for (name, up) in &s.signal.programs {
+        titles.push(name.clone());
+        subtitles.push(l.pick(if *up {
+            ["运行中", "執行中", "Running"]
+        } else {
+            ["未运行", "未運行", "Not running"]
+        }).to_string());
+        icons.push(if *up { (GREEN, Icon::Clock) } else { (RED, Icon::Clock) });
+    }
+    for (slot, names) in &s.signal.radios {
+        titles.push(format!("SIM {slot}"));
+        subtitles.push(names.join(", "));
+        icons.push((BLUE, Icon::Phone));
+    }
+    if let Some(version) = &s.signal.version {
+        titles.push(l.pick(["无线电", "無線電", "Radio"]).to_string());
+        subtitles.push(version.clone());
+        icons.push((GREEN, Icon::Clock));
+    }
+
+    let rows: Vec<Row> = titles
+        .iter()
+        .zip(&subtitles)
+        .zip(&icons)
+        .map(|((title, subtitle), (tone, icon))| Row::new(title).icon(*tone, *icon).subtitle(subtitle))
+        .collect();
+
+    // A radio that said nothing says why here as well: the reason belongs
+    // where the person who asked can see it, not only in the kernel log.
+    let why = s.signal.note.as_deref();
+    let mut y = top;
+    if rows.is_empty() {
+        let brief = why.unwrap_or(l.pick(NO_SIGNAL));
+        let short: String = brief.chars().take(150).collect();
+        y = widgets::footnote(&mut c, t, f, y, &short);
+    } else {
+        let block = widgets::list(&mut c, t, f, y, &rows);
+        y = block.bottom;
+    }
+    // The radio may come up a moment after the page opens; the button asks
+    // again, for a phone whose radio was still on its way.
+    let bh = m.dp(48.0);
+    if y + m.card_gap + bh <= m.h as f32 {
+        let again = l.pick(["重新读取", "重新讀取", "Read again"]);
+        let rect = widgets::button(&mut c, t, f, y + m.card_gap, again);
+        out.push(Hit { rect, action: Action::RereadSignal });
+    }
+    Frame::new(t, c, out, l.pick(SIGNAL), top)
 }
 
 #[cfg(test)]

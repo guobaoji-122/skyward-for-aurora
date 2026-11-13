@@ -6,10 +6,35 @@ pub const RULE_FILES: [&str; 2] = ["/vendor/etc/ueventd.rc", "/odm/etc/ueventd.r
 pub const PASSWD_FILES: [&str; 2] = ["/vendor/etc/passwd", "/odm/etc/passwd"];
 pub const GROUP_FILES: [&str; 2] = ["/vendor/etc/group", "/odm/etc/group"];
 
+/// Where the installed system keeps its own list of accounts and groups.
+///
+/// The platform's own list lives in the system partition, which a recovery
+/// mounts under /mnt/system because /system holds the recovery itself.
+/// The list is the authority on what the numbers are: a phone whose
+/// platform numbers its groups its own way has the numbers there, and the
+/// recovery that only knows the ones Android has always used would give a
+/// program the wrong group, or refuse to start it at all.
+///
+/// The list is at the top of the partition on a phone whose root is its
+/// own, and under `system` on a phone whose root is the system's own
+/// directory, so both are tried.
+pub const SYSTEM_PASSWD_FILES: [&str; 4] = [
+    "/mnt/system/etc/passwd",
+    "/mnt/system/system/etc/passwd",
+    "/mnt/product/etc/passwd",
+    "/mnt/system_ext/etc/passwd",
+];
+pub const SYSTEM_GROUP_FILES: [&str; 4] = [
+    "/mnt/system/etc/group",
+    "/mnt/system/system/etc/group",
+    "/mnt/product/etc/group",
+    "/mnt/system_ext/etc/group",
+];
+
 /// The accounts Android fixes once and for all. The rules, and the init
 /// scripts of the phone's own programs, name them rather than their
 /// numbers, and a recovery has no list of its own to look them up in.
-const ACCOUNTS: [(&str, u32); 33] = [
+const ACCOUNTS: [(&str, u32); 44] = [
     ("root", 0),
     ("system", 1000),
     ("radio", 1001),
@@ -39,9 +64,20 @@ const ACCOUNTS: [(&str, u32); 33] = [
     ("audioserver", 1041),
     ("cameraserver", 1047),
     ("shell", 2000),
+    ("cache", 2001),
+    ("diag", 2002),
+    ("net", 3001),
+    ("net_owner", 3002),
+    ("net_bt", 3003),
+    ("inet", 3004),
+    ("net_raw", 3005),
+    ("net_admin", 3006),
+    ("net_bw_stats", 3007),
+    ("net_bw_acct", 3008),
     ("readproc", 3009),
     ("wakelock", 3010),
     ("uhid", 3011),
+    ("misc", 9998),
     ("nobody", 9999),
 ];
 
@@ -79,6 +115,37 @@ pub fn accounts(files: &[&str]) -> HashMap<String, u32> {
         }
     }
     out
+}
+
+/// Every account the phone has, from every list it keeps.
+///
+/// The vendor's and the odm's lists come first, for the accounts they add
+/// of their own -- the ones named `oem_<number>`, which no list of the
+/// platform's has. The installed system's own list comes next and has the
+/// last word: it is the authority on what the numbers of the groups
+/// Android has always used are, and a phone that numbers them its own way
+/// has the numbers there. The fixed ones are what no list names.
+pub fn all_accounts() -> HashMap<String, u32> {
+    let mut files: Vec<&str> = Vec::new();
+    files.extend_from_slice(&PASSWD_FILES);
+    files.extend_from_slice(&GROUP_FILES);
+    files.extend_from_slice(&SYSTEM_PASSWD_FILES);
+    files.extend_from_slice(&SYSTEM_GROUP_FILES);
+    accounts(&files)
+}
+
+/// The accounts the phone has, and the numbers it gives the groups a
+/// program is run in, for the log.
+///
+/// Which number a group has is worth knowing: a phone that numbers its
+/// groups its own way is a phone the recovery has to read the numbers
+/// from, and the log is where that shows.
+pub fn groups_report(names: &[&str]) -> Vec<(String, u32)> {
+    let known = all_accounts();
+    names
+        .iter()
+        .filter_map(|name| known.get(*name).map(|id| (name.to_string(), *id)))
+        .collect()
 }
 
 /// What a rule calls an account, as a number. The phone's own programs are
@@ -119,7 +186,7 @@ pub fn rules(text: &str, known: &HashMap<String, u32>) -> Vec<Rule> {
 pub fn apply() -> anyhow::Result<usize> {
     use anyhow::Context;
     use std::path::Path;
-    let known = accounts(&PASSWD_FILES.iter().chain(GROUP_FILES.iter()).copied().collect::<Vec<_>>());
+    let known = all_accounts();
     let mut rules = Vec::new();
     for file in RULE_FILES {
         if let Ok(text) = std::fs::read_to_string(file) {
@@ -236,7 +303,7 @@ fn replayable(text: &str, known: &HashMap<String, u32>) -> Vec<(usize, InitComma
 pub fn apply_init() -> anyhow::Result<usize> {
     use std::ffi::CString;
     use std::path::Path;
-    let known = accounts(&PASSWD_FILES.iter().chain(GROUP_FILES.iter()).copied().collect::<Vec<_>>());
+    let known = all_accounts();
     let mut scripts = Vec::new();
     for dir in INIT_DIRS {
         scripts_under(Path::new(dir), &mut scripts)?;
@@ -347,6 +414,25 @@ mod tests {
     fn a_rule_gives_a_node_its_owner_and_permissions() {
         let parsed = rules("/dev/smcinvoke            0660   system     drmrpc\n", &known());
         assert_eq!(parsed, vec![Rule { path: "/dev/smcinvoke".into(), mode: 0o660, uid: 1000, gid: 1026 }]);
+    }
+
+    #[test]
+    fn the_groups_the_phone_names_its_programs_with_are_all_known() {
+        // The radio's own daemon runs in these groups. A recovery that does
+        // not know one of them refuses to start the program that names it,
+        // and the radio is then silently absent.
+        let known = known();
+        for group in ["radio", "cache", "inet", "misc", "audio", "log", "readproc", "wakelock"] {
+            assert!(known.contains_key(group), "no group named {group}");
+        }
+    }
+
+    #[test]
+    fn the_fixed_groups_keep_the_numbers_android_has_always_used() {
+        let known = known();
+        for (name, id) in [("radio", 1001), ("shell", 2000), ("cache", 2001), ("readproc", 3009), ("nobody", 9999)] {
+            assert_eq!(known.get(name), Some(&id), "{name}");
+        }
     }
 
     #[test]

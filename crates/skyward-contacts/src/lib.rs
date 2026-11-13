@@ -45,6 +45,9 @@ pub struct Contact {
 pub struct Call {
     /// The number the other end had, as the phone saw it.
     pub number: String,
+    /// The name the provider kept with the number when it recorded the call.
+    /// It may be empty, or out of date; the contacts are asked as well.
+    pub name: String,
     /// When it was, in milliseconds since the epoch.
     pub at: i64,
     /// How long it lasted, in seconds.
@@ -190,7 +193,7 @@ impl Calls {
     pub fn recent(&self, limit: usize) -> Result<Vec<Call>> {
         let mut query = self
             .db
-            .prepare("SELECT number, date, duration, type FROM calls WHERE deleted = 0 ORDER BY date DESC LIMIT ?1")
+            .prepare("SELECT number, date, duration, type, name FROM calls WHERE deleted = 0 ORDER BY date DESC LIMIT ?1")
             .context("ask the provider for the calls it recorded")?;
         let mut rows = query.query((limit as i64,)).context("ask the provider for the calls it recorded")?;
         let mut calls = Vec::new();
@@ -199,8 +202,10 @@ impl Calls {
             let at: i64 = row.get(1).context("read when a call was")?;
             let seconds: i64 = row.get(2).context("read how long a call was")?;
             let kind: i64 = row.get(3).context("read what kind of call it was")?;
+            let name: Option<String> = row.get(4).context("read the name kept with a call")?;
             calls.push(Call {
                 number: number.unwrap_or_default(),
+                name: name.unwrap_or_default().trim().to_string(),
                 at,
                 seconds,
                 kind,
@@ -208,6 +213,160 @@ impl Calls {
         }
         Ok(calls)
     }
+}
+
+/// The provider's package, whose databases live among the owner's own files.
+const PACKAGE: &str = "com.android.providers.contacts";
+
+/// Every place one of the provider's databases may lie. A recovery mounts
+/// the data partition itself, so the running system's `/data/user/0` view
+/// need not be the path that is there: some phones keep the same files under
+/// `/data/data` or a credential-encrypted area, and a second space or work
+/// profile has a numbered area of its own.
+pub fn places(file: &str) -> Vec<PathBuf> {
+    fn add(out: &mut Vec<PathBuf>, at: PathBuf) {
+        if !out.contains(&at) {
+            out.push(at);
+        }
+    }
+    let mut out = Vec::new();
+    for root in ["/data/user/0", "/data/data", "/data/user_ce/0", "/data/user_de/0"] {
+        add(&mut out, PathBuf::from(format!("{root}/{PACKAGE}/databases/{file}")));
+    }
+    for parent in ["/data/user", "/data/user_ce", "/data/user_de"] {
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().chars().all(|c| c.is_ascii_digit()) {
+                    add(&mut out, entry.path().join(PACKAGE).join("databases").join(file));
+                }
+            }
+        }
+    }
+    // A phone with file-based encryption may give its credential-encrypted
+    // areas a name this recovery does not know beforehand (`user_ce`,
+    // `misc_ce`, `system_ce`, ...). Look one level into /data for any area
+    // that keeps a user's own files, and into each numbered user in it.
+    if let Ok(entries) = std::fs::read_dir("/data") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !(name.contains("user") || name.contains("_ce") || name.contains("_de") || name == "data") {
+                continue;
+            }
+            let root = entry.path();
+            add(&mut out, root.join(PACKAGE).join("databases").join(file));
+            add(&mut out, root.join("0").join(PACKAGE).join("databases").join(file));
+            if let Ok(users) = std::fs::read_dir(&root) {
+                for user in users.flatten() {
+                    if user.file_name().to_string_lossy().chars().all(|c| c.is_ascii_digit()) {
+                        add(&mut out, user.path().join(PACKAGE).join("databases").join(file));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A little writable place for a copy of a database. `/skyward` is the
+/// recovery's own writable filesystem; the temporary directory is a fallback.
+fn copy_area() -> Result<PathBuf> {
+    let fallback = std::env::temp_dir().join("skyward-provider");
+    for at in [PathBuf::from("/skyward/provider"), fallback] {
+        if std::fs::create_dir_all(&at).is_ok() {
+            return Ok(at);
+        }
+    }
+    bail!("nowhere writable to copy the provider's database to")
+}
+
+/// Open a copy of the contacts database with its log, using SQLite's ordinary
+/// rules. `immutable=1` deliberately ignores the write-ahead log, so on a
+/// phone whose provider has not checkpointed yet the main file alone holds
+/// nothing; this is the other way of reading it.
+fn contacts_copy(at: &Path) -> Result<Contacts> {
+    let into = copy_area()?;
+    for name in ["contacts2.db", "contacts2.db-wal", "contacts2.db-shm"] {
+        let _ = std::fs::remove_file(into.join(name));
+    }
+    let copy = with_log(at, &into).context("copy the contacts database and its log")?;
+    let db = Connection::open(&copy).with_context(|| format!("open the copy {}", copy.display()))?;
+    Ok(Contacts { db })
+}
+
+/// The same for the call log.
+fn calls_copy(at: &Path) -> Result<Calls> {
+    let into = copy_area()?;
+    for name in ["calllog.db", "calllog.db-wal", "calllog.db-shm"] {
+        let _ = std::fs::remove_file(into.join(name));
+    }
+    let copy = with_log(at, &into).context("copy the call log and its own log")?;
+    let db = Connection::open(&copy).with_context(|| format!("open the copy {}", copy.display()))?;
+    Ok(Calls { db })
+}
+
+/// Read the people the provider knows, looking in every place its database
+/// may be and falling back to a copy that keeps the write-ahead log. When
+/// nothing comes of it the error says what was tried and why, so the page
+/// can explain itself instead of showing an unexplained empty list.
+pub fn read_contacts() -> Result<Vec<Contact>> {
+    let tried = places("contacts2.db");
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut said: Vec<String> = Vec::new();
+    for at in &tried {
+        if !at.is_file() {
+            continue;
+        }
+        found.push(at.clone());
+        match Contacts::open(at).and_then(|c| c.all()) {
+            Ok(people) if !people.is_empty() => return Ok(people),
+            Ok(_) => said.push(format!("{}: 0 人", at.display())),
+            Err(e) => said.push(format!("{}: {e:#}", at.display())),
+        }
+    }
+    for at in &found {
+        match contacts_copy(at).and_then(|c| c.all()) {
+            Ok(people) if !people.is_empty() => return Ok(people),
+            Ok(_) => said.push(format!("{} 连日志: 0 人", at.display())),
+            Err(e) => said.push(format!("{} 连日志: {e:#}", at.display())),
+        }
+    }
+    if found.is_empty() {
+        bail!("没找到 contacts2.db（找过 {} 处：{}）；data 分区可能还没解密",
+              tried.len(),
+              tried.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("、"))
+    }
+    bail!("contacts2.db 读不到联系人：{}", said.join("；"))
+}
+
+/// Read the most recent calls the provider recorded, the same way.
+pub fn read_calls(limit: usize) -> Result<Vec<Call>> {
+    let tried = places("calllog.db");
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut said: Vec<String> = Vec::new();
+    for at in &tried {
+        if !at.is_file() {
+            continue;
+        }
+        found.push(at.clone());
+        match Calls::open(at).and_then(|c| c.recent(limit)) {
+            Ok(calls) if !calls.is_empty() => return Ok(calls),
+            Ok(_) => said.push(format!("{}: 0 条", at.display())),
+            Err(e) => said.push(format!("{}: {e:#}", at.display())),
+        }
+    }
+    for at in &found {
+        match calls_copy(at).and_then(|c| c.recent(limit)) {
+            Ok(calls) if !calls.is_empty() => return Ok(calls),
+            Ok(_) => said.push(format!("{} 连日志: 0 条", at.display())),
+            Err(e) => said.push(format!("{} 连日志: {e:#}", at.display())),
+        }
+    }
+    if found.is_empty() {
+        bail!("没找到 calllog.db（找过 {} 处：{}）；data 分区可能还没解密",
+              tried.len(),
+              tried.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("、"))
+    }
+    bail!("calllog.db 读不到通话：{}", said.join("；"))
 }
 
 /// A copy of the provider's database that keeps the log beside it, so that
@@ -336,6 +495,20 @@ mod tests {
         assert_eq!(recent[0].number, "+8613700137000", "the newer call comes first");
         assert_eq!(recent[0].kind, MISSED);
         assert_eq!(recent[1].seconds, 30);
+    }
+
+    #[test]
+    fn the_name_kept_with_a_call_is_read_with_it() {
+        let dir = somewhere();
+        let db = dir.join("calllog.db");
+        testing::make_calls(&db, &[("+8613800138000", 1_700_000_000_000, 30, OUTGOING)]);
+        rusqlite::Connection::open(&db)
+            .expect("open the database")
+            .execute("UPDATE calls SET name = 'Zhang San'", [])
+            .expect("name the caller");
+        let calls = Calls::open(&db).expect("open the provider's record of calls");
+        let recent = calls.recent(10).expect("ask for the calls it recorded");
+        assert_eq!(recent[0].name, "Zhang San");
     }
 
     #[test]

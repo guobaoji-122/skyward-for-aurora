@@ -4,6 +4,7 @@ use crate::fmt;
 use crate::font::{Face, Fonts};
 use crate::geom::Rect;
 use crate::icons::{self, Icon};
+use crate::ime::NineCap;
 use crate::lang::Lang;
 use crate::sprite::Sprite;
 use crate::theme::Theme;
@@ -200,6 +201,18 @@ pub struct Bar<'a> {
     /// The battery's temperature, in tenths of a degree Celsius, which the
     /// bar gives to the tenth.
     pub temp: Option<i32>,
+    /// The mobile network the phone is on, and how strong its signal is.
+    pub cell: Option<CellMark>,
+}
+
+/// What the status bar shows of the mobile network: the name of the
+/// network the phone is on, and how many of the four bars its signal
+/// stands at.
+pub struct CellMark {
+    /// The name of the network, as the network writes it.
+    pub name: String,
+    /// How many of the four bars the signal lights, of four.
+    pub bars: u8,
 }
 
 /// The bolt past the battery while the cable is in, as the stock bar draws
@@ -247,13 +260,17 @@ pub fn status_bar(c: &mut Canvas, t: &Theme, f: &Fonts, bar: &Bar, ink: Rgba) {
         c.lay(&art, ox, oy, 1.0);
         right -= m.dp(BATTERY_W_DP + BATTERY_CAP_DP);
     }
-    // From the battery leftwards: the network's fan, the data partition's
-    // lock, the slot's badge, the temperature, and leftmost, as the stock
-    // bar keeps it, how fast data goes.
+    // From the battery leftwards: the mobile network's signal and its
+    // name, the network joined and how fast data goes over it, the data
+    // partition's lock, the slot's badge, the temperature, and leftmost,
+    // as the stock bar keeps it, how fast data goes.
     let gap = m.dp(MARK_GAP_DP);
     let mut left = right;
+    if let Some(cell) = &bar.cell {
+        left = cell_mark(c, t, f, cell, left - gap, cy, ink);
+    }
     if let Some(w) = &bar.wlan {
-        left = wlan_mark(c, t, w, right, cy, ink);
+        left = wlan_mark(c, t, w, left - gap, cy, ink);
     }
     if let Some(open) = bar.data {
         let (art, ox, oy, w) = lock_mark(t, open, left - gap, cy, ink);
@@ -271,6 +288,57 @@ pub fn status_bar(c: &mut Canvas, t: &Theme, f: &Fonts, bar: &Bar, ink: Rgba) {
     if let Some(w) = &bar.wlan {
         speed(c, t, f, &w.speed, w.unit, left - gap, cy, ink);
     }
+}
+
+// The mobile network's mark, as the stock bar draws it: four bars that
+// stand up in steps, of which as many are lit as the signal is strong,
+// and the name of the network beside them. In dp: how wide a bar is, how
+// far apart the bars stand, how tall the tallest of them is, and how far
+// the name stands from the bars.
+const CELL_BAR_W_DP: f32 = 2.6;
+const CELL_BAR_GAP_DP: f32 = 1.2;
+const CELL_BAR_H_DP: f32 = 11.0;
+const CELL_NAME_GAP_DP: f32 = 4.0;
+
+/// The size of the name of the network, in dp: a shade smaller than the
+/// clock, as the stock bar writes it.
+const CELL_NAME_DP: f32 = 11.0;
+
+/// The signal of the mobile network, in four bars, and the name of the
+/// network beside it, ending at `right`.
+///
+/// The bars stand up in steps, as the stock bar draws them: the first is
+/// the shortest and the last the tallest, and as many of them are lit as
+/// the signal is strong. The unlit ones are drawn in the dimmed colour
+/// the battery's empty parts are drawn in.
+///
+/// The name is written to the left of the bars, as the stock bar writes
+/// it, and the left edge of what was drawn is given back.
+fn cell_mark(c: &mut Canvas, t: &Theme, f: &Fonts, cell: &CellMark, right: f32, cy: f32, ink: Rgba) -> f32 {
+    let m = &t.m;
+    let dim = t.pal.battery.empty;
+    let bar_w = m.dp(CELL_BAR_W_DP);
+    let gap = m.dp(CELL_BAR_GAP_DP);
+    let tall = m.dp(CELL_BAR_H_DP);
+    // Four bars, each a quarter taller than the one before it.
+    let step = tall / 4.0;
+    let bars_w = 4.0 * bar_w + 3.0 * gap;
+    let bars_x = right - bars_w;
+    for i in 0..4 {
+        let h = step * (i as f32 + 1.0);
+        let bx = bars_x + (i as f32) * (bar_w + gap);
+        let by = cy + step * 1.5 - h;
+        let lit = (cell.bars as usize) > i;
+        c.fill_round_rect(bx, by, bar_w, h, bar_w / 2.0, if lit { ink } else { dim });
+    }
+    // The name is written with the face that draws every character the
+    // pages write, since a network's name is written in Chinese.
+    let face = if cell.name.chars().all(|ch| f.status.has(ch)) { &f.status } else { &f.body };
+    let name_px = m.dp(CELL_NAME_DP);
+    let name_w = c.text_width(face, &cell.name, name_px);
+    let name_x = bars_x - m.dp(CELL_NAME_GAP_DP) - name_w;
+    c.text(face, &cell.name, name_x, cy + name_px * 0.36, name_px, ink, None);
+    name_x
 }
 
 /// Room between the marks on the bar's right, as the stock bar leaves it
@@ -1658,6 +1726,21 @@ pub fn list_toned(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, rows: &[Row], 
     Block { bottom: top + h, rows: rects }
 }
 
+/// Where each row of a list lies, without drawing any of them: the top of
+/// the first, then the bottom of each, in page coordinates. A page that
+/// draws only the rows in view uses these to know which ones fit.
+pub fn list_edges(t: &Theme, f: &Fonts, top: f32, rows: &[Row]) -> Vec<f32> {
+    let c = Canvas::new(1, 1);
+    let mut edges = Vec::with_capacity(rows.len() + 1);
+    let mut y = top;
+    edges.push(y);
+    for r in rows {
+        y += layout(&c, t, f, r).h;
+        edges.push(y);
+    }
+    edges
+}
+
 /// Account-style card: avatar, name and detail, then optional rows. The
 /// first rect returned covers the name row.
 pub fn device_card(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, title: &str, sub: &str, rows: &[Row]) -> Block {
@@ -2605,6 +2688,8 @@ pub enum Cap {
     Enter,
     /// Show another layer.
     Show(Layer),
+    /// Turn the Chinese keys into the Latin ones, and back.
+    Ime,
 }
 
 /// The keys between the side keys of each row, per layer. Together the
@@ -2632,6 +2717,15 @@ pub fn keyboard_height(t: &Theme) -> f32 {
     let m = &t.m;
     m.dp(KEYBOARD_TOP_DP + 4.0 * KEY_H_DP + 3.0 * KEY_GAP_Y_DP + KEYBOARD_BOTTOM_DP)
 }
+
+/// How tall the pinyin bar over the Chinese keys is.
+pub fn ime_bar_height(t: &Theme) -> f32 {
+    t.m.dp(IME_BAR_DP)
+}
+
+/// The height of the pinyin bar: the sound being spelled and the words it
+/// offers, as a system keyboard keeps them over its keys.
+const IME_BAR_DP: f32 = 56.0;
 
 /// The on-screen keyboard across the bottom of the screen, its top at
 /// `top`: four rows of keys in `layer`, `pressed` drawn held down, and the
@@ -2684,10 +2778,13 @@ pub fn keyboard(c: &mut Canvas, t: &Theme, f: &Fonts, l: Lang, top: f32, layer: 
         Layer::Digits | Layer::Symbols => Cap::Show(Layer::Letters),
     };
     let enter_w = kw * 2.2;
-    let space_x = left + side_w + gx + kw + gx;
+    // The bottom row carries the switch to Chinese, the layer switch, the
+    // space bar and the return key: one keyboard, two ways of typing.
+    let space_x = left + side_w + gx + side_w + gx + kw + gx;
     let space_w = w - pad - enter_w - gx - kw - gx - space_x;
-    keys.push((Rect::new(left, row_top(3), side_w, kh), switch));
-    keys.push((Rect::new(left + side_w + gx, row_top(3), kw, kh), Cap::Char(',')));
+    keys.push((Rect::new(left, row_top(3), side_w, kh), Cap::Ime));
+    keys.push((Rect::new(left + side_w + gx, row_top(3), side_w, kh), switch));
+    keys.push((Rect::new(left + side_w + gx + side_w + gx, row_top(3), kw, kh), Cap::Char(',')));
     keys.push((Rect::new(space_x, row_top(3), space_w, kh), Cap::Space));
     keys.push((Rect::new(space_x + space_w + gx, row_top(3), kw, kh), Cap::Char('.')));
     keys.push((Rect::new(w - pad - enter_w, row_top(3), enter_w, kh), Cap::Enter));
@@ -2718,6 +2815,7 @@ pub fn keyboard(c: &mut Canvas, t: &Theme, f: &Fonts, l: Lang, top: f32, layer: 
             Cap::Show(Layer::Digits) => c.text_center(&f.heading, "123", cx, cy, m.sub_px, ink),
             Cap::Show(Layer::Symbols) => c.text_center(&f.heading, "#+=", cx, cy, m.sub_px, ink),
             Cap::Show(_) => c.text_center(&f.heading, "abc", cx, cy, m.sub_px, ink),
+            Cap::Ime => c.text_center(&f.heading, "中", cx, cy, m.sub_px, ink),
             Cap::Shift => {
                 // An upward arrow, solid while the next letter is a capital.
                 let s = m.dp(9.0);
@@ -2756,6 +2854,86 @@ pub fn keyboard(c: &mut Canvas, t: &Theme, f: &Fonts, l: Lang, top: f32, layer: 
         }
     }
     // A touch between keys belongs to the nearest one.
+    keys.into_iter().map(|(r, cap)| (Rect::new(r.x - gx / 2.0, r.y - gy / 2.0, r.w + gx, r.h + gy), cap)).collect()
+}
+
+/// The letters each of the nine keys spells, as a phone keypad writes them.
+fn nine_letters(digit: char) -> &'static str {
+    match digit {
+        '2' => "ABC",
+        '3' => "DEF",
+        '4' => "GHI",
+        '5' => "JKL",
+        '6' => "MNO",
+        '7' => "PQRS",
+        '8' => "TUV",
+        '9' => "WXYZ",
+        _ => "",
+    }
+}
+
+/// The nine keys a Chinese sound is spelled on, in the same four rows and
+/// the same height as the Latin keyboard, so a page above it keeps its
+/// place when the keyboard changes. Returns where each key answers a touch.
+#[allow(clippy::too_many_arguments)]
+pub fn nine_keyboard(
+    c: &mut Canvas,
+    t: &Theme,
+    f: &Fonts,
+    l: Lang,
+    top: f32,
+    pressed: Option<NineCap>,
+    enter: &str,
+) -> Vec<(Rect, NineCap)> {
+    let m = &t.m;
+    let w = m.w as f32;
+    let (panel, key, side, ink, shadow) = if t.dark {
+        (Rgba::rgb(18, 18, 18), Rgba::rgb(58, 58, 58), Rgba::rgb(38, 38, 38), Rgba::rgb(237, 237, 237), Rgba::rgb(0, 0, 0))
+    } else {
+        (Rgba::rgb(224, 226, 231), Rgba::rgb(255, 255, 255), Rgba::rgb(193, 198, 207), Rgba::rgb(0, 0, 0), Rgba::rgb(138, 141, 147))
+    };
+    c.fill_rect(0.0, top, w, keyboard_height(t), panel);
+    let (pad, gx, gy, kh) = (m.dp(KEYBOARD_PAD_X_DP), m.dp(KEY_GAP_X_DP), m.dp(KEY_GAP_Y_DP), m.dp(KEY_H_DP));
+    let col_w = (w - pad * 2.0 - gx * 2.0) / 3.0;
+    let row_top = |r: usize| top + m.dp(KEYBOARD_TOP_DP) + r as f32 * (kh + gy);
+    let mut keys: Vec<(Rect, NineCap)> = Vec::new();
+    for i in 0..9 {
+        let (r, col) = (i / 3, i % 3);
+        let cap = if i == 0 { NineCap::Clear } else { NineCap::Digit(char::from(b'1' + i as u8)) };
+        keys.push((Rect::new(pad + col as f32 * (col_w + gx), row_top(r), col_w, kh), cap));
+    }
+    let bottom_w = (w - pad * 2.0 - gx * 3.0) / 4.0;
+    for (k, cap) in [NineCap::Latin, NineCap::Space, NineCap::Backspace, NineCap::Enter].into_iter().enumerate() {
+        keys.push((Rect::new(pad + k as f32 * (bottom_w + gx), row_top(3), bottom_w, kh), cap));
+    }
+    let radius = m.dp(KEY_RADIUS_DP);
+    for &(r, cap) in &keys {
+        let plain = matches!(cap, NineCap::Digit(_));
+        let base = match cap {
+            NineCap::Enter => t.pal.accent,
+            _ if plain => key,
+            _ => side,
+        };
+        let fill = if pressed == Some(cap) { mix(base, ink, 0.16) } else { base };
+        if !t.dark {
+            c.fill_round_rect(r.x, r.y + m.dp(1.0), r.w, r.h, radius, shadow.with_alpha(110));
+        }
+        c.fill_round_rect(r.x, r.y, r.w, r.h, radius, fill);
+        let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        match cap {
+            NineCap::Digit(ch) => {
+                // A system keypad writes its letters large in the middle
+                // and the digit small in the corner, not the other way round.
+                c.text_center(&f.heading, &ch.to_string(), r.x + m.dp(14.0), r.y + m.dp(15.0), m.dp(13.0), ink.with_alpha(150));
+                c.text_center(&f.heading, nine_letters(ch), cx, cy + m.dp(3.0), m.dp(21.0), ink);
+            }
+            NineCap::Clear => c.text_center(&f.body, l.pick(["1 清空", "1 清空", "1 Clear"]), cx, cy, m.sub_px, ink),
+            NineCap::Latin => c.text_center(&f.heading, l.pick(["中/En", "中/En", "abc"]), cx, cy, m.sub_px, ink),
+            NineCap::Space => c.text_center(&f.body, l.pick(["0 空格", "0 空格", "0 Space"]), cx, cy, m.sub_px, ink),
+            NineCap::Backspace => c.text_center(&f.body, l.pick(["删除", "刪除", "Delete"]), cx, cy, m.sub_px, ink),
+            NineCap::Enter => c.text_center(&f.heading, enter, cx, cy, m.sub_px, Rgba::rgb(255, 255, 255)),
+        }
+    }
     keys.into_iter().map(|(r, cap)| (Rect::new(r.x - gx / 2.0, r.y - gy / 2.0, r.w + gx, r.h + gy), cap)).collect()
 }
 

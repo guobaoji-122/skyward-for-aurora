@@ -7,7 +7,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io;
 use std::io::Read;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -121,9 +123,27 @@ const CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 /// phone's own init gives it.
 ///
 /// `libraries` is a directory of shared libraries every one of them may
-/// need, searched after whatever it names itself.
-pub fn start(services: &[Service], libraries: Option<&Path>) -> Result<()> {
-    let known = ueventd::accounts(&ueventd::PASSWD_FILES.iter().chain(&ueventd::GROUP_FILES).copied().collect::<Vec<_>>());
+/// need, searched after whatever it names itself, and `extra` the others
+/// the phone's own programs need: the bundles of shared libraries the
+/// phone's partitions were built against, which lie in no directory of
+/// the phone's partitions at all.
+pub fn start(services: &[Service], libraries: Option<&Path>, extra: &[PathBuf]) -> Result<()> {
+    let known = ueventd::all_accounts();
+    // The numbers the phone gives the groups a program runs in are worth
+    // knowing: a group the recovery could not find is a program it will
+    // not start, and the reason is here.
+    {
+        let mut names: Vec<&str> = vec!["radio", "cache", "inet", "misc", "audio", "log", "readproc", "wakelock"];
+        for s in services {
+            for g in &s.groups {
+                if !names.contains(&g.as_str()) {
+                    names.push(g.as_str());
+                }
+            }
+        }
+        let said: Vec<String> = ueventd::groups_report(&names).into_iter().map(|(n, id)| format!("{n}={id}")).collect();
+        skyward_sys::kmsg(&format!("the phone's groups: {}", said.join(" ")))?;
+    }
     for s in services {
         let mut s = s.clone();
         if !Path::new(&s.path).is_file() {
@@ -146,6 +166,12 @@ pub fn start(services: &[Service], libraries: Option<&Path>) -> Result<()> {
         }
         if let Some(dir) = libraries {
             s.libraries.push(dir.to_string_lossy().into_owned());
+        }
+        for dir in extra {
+            let dir = dir.to_string_lossy().into_owned();
+            if !s.libraries.contains(&dir) {
+                s.libraries.push(dir);
+            }
         }
         let who = match Credentials::of(&s, &known) {
             Ok(who) => who,
@@ -216,7 +242,18 @@ struct Credentials {
     gid: libc::gid_t,
     /// The other groups it is in.
     groups: Vec<libc::gid_t>,
+    /// Who the sockets this service asks for belong to, and in what mode.
+    sockets: Option<Socket>,
     kept: Option<Kept>,
+}
+
+/// A socket this service asks for: the account it belongs to and the mode
+/// it has.
+#[derive(Debug, Clone, Copy)]
+struct Socket {
+    uid: libc::uid_t,
+    gid: libc::gid_t,
+    mode: u32,
 }
 
 /// The capabilities a program keeps, as masks.
@@ -236,8 +273,32 @@ impl Credentials {
     fn of(s: &Service, known: &HashMap<String, u32>) -> Result<Self> {
         let id = |name: &String| ueventd::account(known, name).with_context(|| format!("{}: the phone has no account named {name}", s.path));
         let uid = s.user.as_ref().map(id).transpose()?.unwrap_or(0);
-        let mut groups = s.groups.iter().map(id).collect::<Result<Vec<_>>>()?;
+        // A group the phone does not have is a group the program cannot be
+        // in, and that is no reason to refuse to start it: the program may
+        // well not need that group at all. The user is another matter --
+        // that is who the program is, and without it there is no program to
+        // start.
+        let mut groups: Vec<libc::gid_t> = Vec::new();
+        for name in &s.groups {
+            match ueventd::account(known, name) {
+                Some(id) => groups.push(id),
+                None => {
+                    let _ = skyward_sys::kmsg(&format!("{}: the phone has no group named {name}", s.path));
+                }
+            }
+        }
         let gid = if groups.is_empty() { 0 } else { groups.remove(0) };
+        // A socket belongs to an account of its own, as init's socket line
+        // says of one: the user and the group are worked out here, while
+        // the names can still be looked up.
+        let sockets = match &s.socket_owner {
+            Some(owner) => {
+                let uid = owner.user.as_ref().map(id).transpose()?.unwrap_or(0);
+                let gid = owner.group.as_ref().and_then(|g| ueventd::account(known, g)).unwrap_or(0);
+                Some(Socket { uid, gid, mode: owner.mode.unwrap_or(0o666) })
+            }
+            None => None,
+        };
         let kept = if s.capabilities.is_empty() {
             None
         } else {
@@ -247,7 +308,7 @@ impl Credentials {
             let last = last.trim().parse().with_context(|| format!("read the number in {CAP_LAST_CAP}"))?;
             Some(Kept { mask, dropping: mask | bit("SETPCAP")?, last })
         };
-        Ok(Self { uid, gid, groups, kept })
+        Ok(Self { uid, gid, groups, sockets, kept })
     }
 
     /// Become who the program runs as, in the child about to run it, as
@@ -499,15 +560,36 @@ fn command(s: &Service, who: &Credentials) -> Command {
 /// The program to run. Through the phone's own linker, the libraries are
 /// the phone's own and its own linker decides where they are; this
 /// recovery's search path is of no use to it, and is left out.
+///
+/// The sockets a service asks for are made before the program is started
+/// and are handed to it the way init hands them over: the descriptor is
+/// left open across the exec, and the program is told which number it is
+/// through `ANDROID_SOCKET_<name>`. A program that binds the same path
+/// itself would fail with the path already taken, so a service that wants
+/// a socket must be one that reads the descriptor instead of making its
+/// own -- which is what the phone's own programs do.
 fn command_with(s: &Service, who: &Credentials, runner: Option<&Path>) -> Command {
     let mut cmd = match runner {
         Some(linker) => {
             // The phone's own linker takes the program as its first
             // argument and has no option for the libraries: it reads
-            // LD_LIBRARY_PATH, like any other program it starts.
+            // LD_LIBRARY_PATH, like any other program it starts. The
+            // phone's own directories come first, and after them the
+            // bundles of shared libraries the phone opened: the vendor
+            // interface's bundle and the platform's own text handling
+            // are not in any directory of the phone's partitions, and a
+            // program that asks for one of them finds nothing without
+            // them.
+            let mut path = String::from(PHONE_LIBRARIES);
+            for dir in &s.libraries {
+                if !path.split(':').any(|p| p == dir) {
+                    path.push(':');
+                    path.push_str(dir);
+                }
+            }
             let mut c = Command::new(linker);
             c.arg(&s.path).args(&s.args);
-            c.env("LD_LIBRARY_PATH", PHONE_LIBRARIES);
+            c.env("LD_LIBRARY_PATH", path);
             c
         }
         None => {
@@ -520,11 +602,67 @@ fn command_with(s: &Service, who: &Credentials, runner: Option<&Path>) -> Comman
     if runner.is_none() && !s.libraries.is_empty() {
         cmd.env("LD_LIBRARY_PATH", s.libraries.join(":"));
     }
+    for name in &s.sockets {
+        match socket_for(name, who.sockets) {
+            Ok((fd, listener)) => {
+                // The descriptor has to survive the exec, so it is left
+                // open and the program is told its number. The socket
+                // itself is kept alive by forgetting it: the program has
+                // the descriptor now.
+                unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
+                cmd.env(&format!("ANDROID_SOCKET_{}", name.replace('-', "_")), fd.to_string());
+                std::mem::forget(listener);
+                let _ = skyward_sys::kmsg(&format!("socket {name} is listening on descriptor {fd}"));
+            }
+            Err(e) => {
+                let _ = skyward_sys::kmsg(&format!("socket {name} is not there: {e:#}"));
+            }
+        }
+    }
     let who = who.clone();
     // Only system calls run between the fork and the exec, on what was
     // worked out before it.
     unsafe { cmd.pre_exec(move || who.take_on()) };
     cmd
+}
+
+/// Where init keeps the sockets it makes for the phone's own programs.
+const SOCKET_DIR: &str = "/dev/socket";
+
+/// A socket made for a program, and the descriptor it is on.
+///
+/// The path is made first as a socket of its own, and bound where init
+/// binds it. A program that reads the descriptor rather than binding the
+/// path itself is what this is for; a program that binds the path anyway
+/// finds it taken, which is the same thing init does.
+fn socket_for(name: &str, owner: Option<Socket>) -> Result<(RawFd, UnixListener)> {
+    ensure!(!name.is_empty() && !name.contains('/'), "a socket's name is {name:?}");
+    let dir = Path::new(SOCKET_DIR);
+    fs::create_dir_all(dir).with_context(|| format!("make {SOCKET_DIR}"))?;
+    let path = dir.join(name);
+    // What is at the path may be left over from an earlier run of this
+    // recovery; a socket file is taken away before another is bound.
+    if path.exists() {
+        let _ = fs::remove_file(&path);
+    }
+    let listener = UnixListener::bind(&path).with_context(|| format!("bind {}", path.display()))?;
+    let mode = owner.map_or(0o666, |o| o.mode);
+    let _ = fs::set_permissions(&path, fs::Permissions::from_mode(mode));
+    // The socket belongs to the account init gives it, so that the
+    // programs of that account may reach it and the others may not.
+    if let Some(owner) = owner {
+        let c = unsafe {
+            libc::chown(
+                path.as_os_str().as_encoded_bytes().as_ptr() as *const libc::c_char,
+                owner.uid,
+                owner.gid,
+            )
+        };
+        if c < 0 {
+            let _ = skyward_sys::kmsg(&format!("socket {name} keeps its own owner: {}", io::Error::last_os_error()));
+        }
+    }
+    Ok((listener.as_raw_fd(), listener))
 }
 
 /// Lock in memory every file the running programs have mapped or open on

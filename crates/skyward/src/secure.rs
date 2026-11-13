@@ -159,6 +159,10 @@ fn describe_hardware(wanted: &[String]) -> Result<String> {
     Ok(out)
 }
 
+/// The bundle that holds the platform's own text handling, which the
+/// programs of the vendor ask for as well.
+pub const TEXT_BUNDLE: &str = "com.android.i18n";
+
 /// Open the bundle of libraries the phone's own partitions were built
 /// against and give the directory they are in. A phone whose partitions
 /// need no bundle has none to open.
@@ -188,6 +192,22 @@ pub fn libraries() -> Result<Option<PathBuf>> {
         }
     }
     Ok(staged())
+}
+
+/// The directories of the other bundles the phone's own programs need.
+///
+/// The one that matters is the bundle that holds the text handling of the
+/// platform: from Android 14 the characters of every language live in a
+/// bundle of their own, and the radio's own library asks for them through
+/// the platform's own database library. A recovery that has not opened
+/// that bundle cannot start the radio, and the linker says only which
+/// library is missing.
+pub fn extra_libraries() -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    if let Some(at) = bundle(TEXT_BUNDLE)? {
+        out.push(at.join(BUNDLE_LIBS));
+    }
+    Ok(out)
 }
 
 /// Where the libraries of the installed system are put when the phone

@@ -23,6 +23,8 @@ mod partwork;
 #[cfg(target_os = "android")]
 mod pty;
 #[cfg(target_os = "android")]
+mod radio;
+#[cfg(target_os = "android")]
 mod readings;
 #[cfg(target_os = "android")]
 mod relabel;
@@ -167,6 +169,20 @@ enum Cmd {
     Services {
         #[arg(long, default_value = "/skyward/device.toml")]
         config: String,
+    },
+    /// Say what the phone's radio is doing: whether the radio's own
+    /// services are registered with the phone's service directory, which
+    /// cards they serve, and what the modem says about itself.
+    ///
+    /// This is the first thing to ask of a radio that is not there: the
+    /// phone's own services say nothing about the network until the
+    /// radio's own daemon has registered, and the reason why it did not
+    /// is in the kernel log.
+    #[cfg(target_os = "android")]
+    Radio {
+        /// Wait this many seconds for the radio to come up.
+        #[arg(long, default_value_t = 0)]
+        wait: u64,
     },
     /// List the display connectors, their modes, CRTCs and planes.
     #[cfg(target_os = "android")]
@@ -348,11 +364,13 @@ fn main() -> Result<()> {
             let props = skyward_info::installed_props(booted_slot()?)?;
             let mut services = DeviceConfig::load(&config)?.services;
             services.retain(|s| s.runs_on(&props));
-            services::start(&services, secure::libraries()?.as_deref())?;
+            services::start(&services, secure::libraries()?.as_deref(), &secure::extra_libraries()?)?;
             loop {
                 std::thread::park();
             }
         }
+        #[cfg(target_os = "android")]
+        Cmd::Radio { wait } => radio(wait),
         #[cfg(target_os = "android")]
         Cmd::Kms { card } => {
             print!("{}", skyward_ui::surface::kms::report(&card)?);
@@ -752,16 +770,28 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot) -> Result<()> {
     if let Some(dir) = &libraries {
         skyward_sys::kmsg(&format!("the phone's own libraries are at {}", dir.display()))?;
     }
+    // The other bundles of shared libraries the phone's own programs need.
+    let extra = secure::extra_libraries()?;
+    for dir in &extra {
+        skyward_sys::kmsg(&format!("the phone's own libraries are also at {}", dir.display()))?;
+    }
     // Keep the kernel's own log whether the services came up or not. A
     // service that ends at once, or one that never registers, says why in
     // that log; returning early from this function used to leave it behind
     // in a ring buffer that goes away with the next start -- exactly when
     // it is wanted. The services' own error is still returned unchanged.
-    let started = services::start(&services, libraries.as_deref());
+    let started = services::start(&services, libraries.as_deref(), &extra);
     if let Err(e) = skyward_sys::keep_kernel_log() {
         let _ = skyward_sys::kmsg(&format!("the kernel log is not kept: {e:#}"));
     }
     started?;
+    // What the phone's radio is doing, once the radio's own services have
+    // had their chance to come up. A radio that did not come up says why
+    // here, and the reason belongs in the log rather than only on a screen
+    // nobody is looking at.
+    if let Err(e) = radio::report(0) {
+        let _ = skyward_sys::kmsg(&format!("the radio did not answer: {e:#}"));
+    }
     agree_on_the_notes_key(&registering)
 }
 
@@ -773,7 +803,7 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot) -> Result<()> {
 fn hand_over(owners: &[skyward_config::Owners]) -> Result<usize> {
     use skyward_sys::ueventd;
     use std::os::unix::fs::PermissionsExt;
-    let known = ueventd::accounts(&ueventd::PASSWD_FILES.iter().chain(&ueventd::GROUP_FILES).copied().collect::<Vec<_>>());
+    let known = ueventd::all_accounts();
     let id = |name: &str| ueventd::account(&known, name).with_context(|| format!("the phone has no account named {name}"));
     let mut handed = 0;
     for run in owners {
@@ -1136,6 +1166,12 @@ fn volume_key(seconds: u64) -> Result<()> {
 #[cfg(not(target_os = "android"))]
 fn volume_key(_seconds: u64) -> Result<()> {
     anyhow::bail!("this host has no volume keys")
+}
+
+/// Say what the phone's radio is doing.
+#[cfg(target_os = "android")]
+fn radio(wait: u64) -> Result<()> {
+    radio::print(wait)
 }
 
 fn info(config: &str) -> Result<()> {

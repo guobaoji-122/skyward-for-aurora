@@ -435,8 +435,21 @@ pub struct Service {
     pub registers: Vec<String>,
     /// Android-init-style sockets to create under /dev/socket and hand to
     /// the program the way init does, through ANDROID_SOCKET_<name>.
+    ///
+    /// The socket is made before the program starts, and the descriptor is
+    /// left open across the exec. A program that binds the same path
+    /// itself would find it taken: the phone's own programs read the
+    /// descriptor instead, which is what init's own sockets are for. A
+    /// program of this phone's that binds the path itself and does not
+    /// read the descriptor is not to be given a socket here.
     #[serde(default)]
     pub sockets: Vec<String>,
+    /// Who may reach a socket this service asks for, and in what mode,
+    /// as init's own socket line says: the user, the group, and the
+    /// permissions. Where a service says none, everyone may reach it, as
+    /// the socket of a program that does not care.
+    #[serde(default)]
+    pub socket_owner: Option<SocketOwner>,
 
     /// The file that describes what the program registers, where the phone
     /// keeps that file apart from its other descriptions, as one its init
@@ -482,6 +495,21 @@ pub struct Service {
     /// phone.
     #[serde(default)]
     pub optional: bool,
+}
+
+/// Who may reach a socket, and in what mode, as init's own socket line
+/// says of one.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SocketOwner {
+    /// The user the socket belongs to.
+    #[serde(default)]
+    pub user: Option<String>,
+    /// The group the socket belongs to.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// The mode the socket has, as the number the phone writes it in.
+    #[serde(default)]
+    pub mode: Option<u32>,
 }
 
 /// The kernel's capabilities, by the names init's capabilities lines give

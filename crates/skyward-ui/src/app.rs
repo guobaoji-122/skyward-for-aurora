@@ -11,6 +11,7 @@ use crate::focus::{self, Group, Spot, Stop};
 use crate::font::Fonts;
 use crate::geom::Rect;
 use crate::glow::{self, GlowClock};
+use crate::ime::{self, NineCap};
 use crate::lang::{Lang, Text};
 use crate::motion::{self, Spring};
 use crate::pages::{self, Band, Ctx};
@@ -21,7 +22,7 @@ use crate::settings::Settings;
 use crate::term::{self, Term, TermKey};
 use crate::theme::Theme;
 use crate::tr;
-use crate::widgets::{self, Bar, Bolt, Cap, Layer, WlanMark};
+use crate::widgets::{self, Bar, Bolt, Cap, CellMark, Layer, WlanMark};
 use serde::{Deserialize, Serialize};
 use skyward_info::DeviceInfo;
 use skyward_install::{Event, ImageKind, Outcome, Reflash, Refusal, Stage};
@@ -150,6 +151,16 @@ pub enum Screen {
     /// A network added by hand: its name, how it is protected and its
     /// password, typed on the screen's keyboard.
     WlanAdd,
+    /// The phone's contacts, as its provider keeps them: who they are and
+    /// the numbers to reach them.
+    Contacts,
+    /// One contact, and the numbers the phone has for them.
+    Contact(usize),
+    /// The calls the phone recorded, most recent first.
+    Calls,
+    /// What the phone's radio is doing: whether it has come up, which
+    /// cards it serves, and what it says about the network.
+    Signal,
 }
 
 /// How far asking the update server for the newest system has come.
@@ -1434,6 +1445,28 @@ pub enum Action {
     StopSkywardUpdate,
     /// A control whose work is not wired up yet; touching it says so.
     Unavailable(&'static str),
+    /// Open the contact at this place in the list of them.
+    OpenContact(usize),
+    /// Empty the contact search field.
+    ClearContacts,
+    /// Read the provider's contacts again, after its files have been opened.
+    RereadContacts,
+    /// Read the call log again, and the names its numbers belong to.
+    RereadCalls,
+    /// Read what the phone's radio is doing again.
+    RereadSignal,
+    /// Change the keyboard between the Latin letters and the nine keys that
+    /// spell Chinese sounds.
+    ToggleIme,
+    /// A key of the nine-key Chinese keyboard.
+    Nine(NineCap),
+    /// Choose the character at this place among the sound's candidates.
+    PickCharacter(usize),
+    /// Show the next or the earlier page of characters a sound offers.
+    TurnCharacters(i8),
+    /// Write out the next sound the keys can spell: `94264` is `zhang`,
+    /// and it is `xiang` too.
+    TurnPinyin,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1758,6 +1791,73 @@ pub struct Queued {
 /// Choices the pages show and the user changes, and where installing
 /// stands.
 #[derive(Clone, Debug, PartialEq)]
+/// The contacts page's state: the people read from the provider, the search
+/// typed into its field, and the one whose page is open.
+#[derive(Default)]
+pub struct ContactsPage {
+    /// Everyone the provider knows, read once as the page opens, after the
+    /// data partition has opened.
+    pub all: Vec<skyward_contacts::Contact>,
+    /// What the search field holds; empty shows everyone.
+    pub query: String,
+    /// The contact whose page is open, by its place in `all`.
+    pub selected: Option<usize>,
+    /// Why the reading came to nothing, shown where the list would be.
+    pub note: Option<String>,
+    /// How far down the list a finger has taken it, in rows.
+    pub scroll: usize,
+}
+
+/// What the phone's radio is doing, as the signal page shows it.
+///
+/// The radio of a modern phone answers through a callback object rather
+/// than at once, so what can be known without waiting for an answer is
+/// whether the radio's own services have registered at all, and what
+/// they say of themselves.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Signal {
+    /// The cards the phone has a radio for.
+    pub cards: Vec<u32>,
+    /// What each card's radio is called: the network, the SIM, the modem.
+    pub radios: Vec<(u32, Vec<String>)>,
+    /// What the radio says of itself, as it names its own version.
+    pub version: Option<String>,
+    /// The programs the radio is made of, and whether each is running.
+    pub programs: Vec<(String, bool)>,
+    /// Why the radio said nothing, when it said nothing.
+    pub note: Option<String>,
+    /// The mobile network the phone is on, and how strong its signal is:
+    /// what the top bar shows of the radio.
+    pub cell: Option<Cell>,
+}
+
+/// The mobile network the phone is on, and how strong its signal is.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Cell {
+    /// The name of the network, as the network writes it: "中国联通" and
+    /// the like.
+    pub name: String,
+    /// How many of the four bars the signal stands at, of four.
+    pub bars: u8,
+}
+
+/// The Chinese input method's own state: which keyboard shows, the sound
+/// being spelled on the nine keys, and the page of characters offered for
+/// it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Ime {    pub nine: bool,
+    pub digits: String,
+    pub page: usize,
+    /// Words and characters the sound offers, worked out when it changes.
+    pub choices: Vec<String>,
+    /// The sounds the keys can spell, the likeliest first.
+    pub spellings: Vec<String>,
+    /// Which of them is written out.
+    pub spell_at: usize,
+    /// Its pinyin, as a system keyboard writes it above the candidates.
+    pub spelling: String,
+}
+
 pub struct State {
     /// The language the pages speak.
     pub lang: Lang,
@@ -1903,6 +2003,19 @@ pub struct State {
     /// The key of the on-screen keyboard, or the choice of a list open over
     /// the page, a finger holds down.
     pub held: Option<Action>,
+    /// The contacts page's state.
+    pub contacts: ContactsPage,
+    /// The Chinese keyboard, and the sound being spelled on it.
+    pub ime: Ime,
+    /// How far down the call log a finger has taken it, in rows.
+    pub calls_scroll: usize,
+    /// The calls the provider recorded, most recent first, read as the call
+    /// log page opens.
+    pub calls: Vec<skyward_contacts::Call>,
+    /// Why the call log's reading came to nothing, shown on its page.
+    pub calls_note: Option<String>,
+    /// What the phone's radio is doing, read as the signal page opens.
+    pub signal: Signal,
     /// The folder the file manager shows.
     pub files: Folder,
     /// The folder of internal storage a file to install is chosen in, its
@@ -2044,6 +2157,12 @@ impl Default for State {
             search: String::new(),
             layer: Layer::Letters,
             held: None,
+            contacts: ContactsPage::default(),
+            ime: Ime::default(),
+            calls_scroll: 0,
+            calls: Vec::new(),
+            calls_note: None,
+            signal: Signal::default(),
             files: Folder::new("/"),
             storage: Folder::new(""),
             usb_drive: None,
@@ -2089,6 +2208,20 @@ impl State {
             Some(Action::Type(cap)) => Some(cap),
             _ => None,
         }
+    }
+
+    /// The key of the nine-key Chinese keyboard a finger holds down.
+    pub fn nine_held(&self) -> Option<NineCap> {
+        match self.held {
+            Some(Action::Nine(cap)) => Some(cap),
+            _ => None,
+        }
+    }
+
+    /// The characters the phone's people are named with, for the nine keys
+    /// to offer before all the others.
+    pub fn name_chars(&self) -> std::collections::HashSet<char> {
+        ime::name_chars(self.contacts.all.iter().map(|c| c.name.as_str()))
     }
 
     /// The folder the list on page `screen` shows: the file manager's, or
@@ -2383,6 +2516,13 @@ pub enum Effect {
     /// Merge the update that waits in the slot the phone runs from,
     /// telling how it goes with [`App::set_update`].
     Merge,
+    /// Read the phone's contacts, telling them with [`App::set_contacts`].
+    ReadContacts,
+    /// Read the calls the phone recorded, telling them with [`App::set_calls`].
+    ReadCalls,
+    /// Read what the phone's radio is doing, telling it with
+    /// [`App::set_signal`].
+    ReadSignal,
 }
 
 enum Drag {
@@ -3981,6 +4121,7 @@ impl App {
             },
             slot: info.slot.map(Slot::letter),
             temp: battery.and_then(|b| b.temp),
+            cell: self.state.signal.cell.as_ref().map(|c| CellMark { name: c.name.clone(), bars: c.bars }),
         }
     }
 
@@ -4416,6 +4557,154 @@ impl App {
     /// seconds, or could not: it becomes the folder shown.
     pub fn set_files(&mut self, folder: String, files: Result<Vec<FileRow>, String>, listed: i64) {
         self.show_folder(Screen::Files, folder, files, listed);
+    }
+
+    /// The runtime read the contacts from the provider's database, or could
+    /// not: they become the people the contacts page lists.
+    pub fn set_contacts(&mut self, contacts: Result<Vec<skyward_contacts::Contact>, String>) {
+        match contacts {
+            Ok(people) => {
+                self.state.contacts.all = people;
+                self.state.contacts.note = None;
+            }
+            Err(why) => {
+                self.state.contacts.all.clear();
+                self.state.contacts.note = Some(why);
+            }
+        }
+        self.state.contacts.scroll = 0;
+        self.fill_call_names();
+        self.refresh_choices();
+        self.refresh();
+    }
+
+    /// Give every call the name of the person whose number it is. The two
+    /// readings arrive in either order, so this runs after each of them;
+    /// keeping the answer on the call itself means a scrolling page never
+    /// compares hundreds of numbers against hundreds of people again.
+    fn fill_call_names(&mut self) {
+        if self.state.calls.is_empty() || self.state.contacts.all.is_empty() {
+            return;
+        }
+        let mut index: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for person in &self.state.contacts.all {
+            if person.name.is_empty() {
+                continue;
+            }
+            for n in &person.numbers {
+                let key = ime::number(n);
+                if key.len() >= 7 {
+                    index.entry(key).or_insert_with(|| person.name.clone());
+                }
+            }
+        }
+        for call in &mut self.state.calls {
+            if !call.name.is_empty() {
+                continue;
+            }
+            let key = ime::number(&call.number);
+            if key.is_empty() {
+                continue;
+            }
+            let found = index.get(&key).cloned().or_else(|| {
+                index.iter().find(|(n, _)| ime::same_number(n, &key)).map(|(_, name)| name.clone())
+            });
+            match found {
+                Some(name) => call.name = name,
+                None if !call.number.is_empty() => {
+                    let own = call.number.clone();
+                    call.name = own;
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// Work out what the nine keys offer once, when the sound or the people
+    /// change, rather than on every frame a page is drawn.
+    fn refresh_choices(&mut self) {
+        let names: Vec<String> = self.state.contacts.all.iter().map(|c| c.name.clone()).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let favourite = ime::name_chars(refs.iter().copied());
+        // On the contacts page the people are what is being looked for; on
+        // any other page the features are, and the names come after.
+        let people_first = self.screen() == Screen::Contacts;
+        let digits = self.state.ime.digits.clone();
+        // A sound that spells nothing is no sound: it is not offered.
+        let spellings: Vec<String> = ime::spellings(&digits)
+            .into_iter()
+            .filter(|said| !ime::choices_of(said, &digits, &refs, &favourite, people_first).is_empty())
+            .collect();
+        // The sound the most of the people are called by comes first; where
+        // no name says so, the sound whose characters are commonest. Only
+        // a whole sound may lead: `zh` is the beginning of one, not one.
+        let whole: Vec<usize> = spellings
+            .iter()
+            .enumerate()
+            .filter(|(_, said)| ime::complete(said))
+            .map(|(k, _)| k)
+            .collect();
+        let pool = if whole.is_empty() { (0..spellings.len()).collect::<Vec<_>>() } else { whole };
+        let choices = ime::choices(&spellings, &digits, &refs, &favourite, people_first);
+        let spell_at = if self.state.ime.spell_at > 0 && self.state.ime.spell_at < spellings.len() {
+            self.state.ime.spell_at
+        } else {
+            // The sound the first choice belongs to is the one written out.
+            match choices.first() {
+                Some((_, _, k)) => *k,
+                None => {
+                    let mut best = (0usize, usize::MAX, 0usize);
+                    for k in pool {
+                        let said = &spellings[k];
+                        let named = ime::named_after(said, &refs);
+                        let common = ime::commonness(said);
+                        if named > best.0 || (named == best.0 && common < best.1) {
+                            best = (named, common, k);
+                        }
+                    }
+                    best.2
+                }
+            }
+        };
+        let said = spellings.get(spell_at).cloned().unwrap_or_default();
+        let words: Vec<String> = choices.into_iter().map(|(word, _, _)| word).collect();
+        self.state.ime.spellings = spellings;
+        self.state.ime.spell_at = spell_at;
+        self.state.ime.spelling = said;
+        self.state.ime.choices = words;
+    }
+
+    /// The runtime read the provider's record of calls, or could not: they
+    /// become what the call log page lists, and a failure says why there.
+    pub fn set_calls(&mut self, calls: Result<Vec<skyward_contacts::Call>, String>) {
+        match calls {
+            Ok(list) => {
+                self.state.calls = list;
+                self.state.calls_note = None;
+            }
+            Err(why) => {
+                self.state.calls.clear();
+                self.state.calls_note = Some(why);
+            }
+        }
+        self.state.calls_scroll = 0;
+        self.fill_call_names();
+        self.refresh();
+    }
+
+    /// The runtime said what the phone's radio is doing, or could not.
+    pub fn set_signal(&mut self, signal: Result<Signal, String>) {
+        match signal {
+            Ok(got) => {
+                self.state.signal = got;
+                self.state.signal.note = None;
+            }
+            Err(why) => {
+                self.state.signal = Signal::default();
+                self.state.signal.note = Some(why);
+            }
+        }
+        self.refresh();
     }
 
     /// The runtime listed a folder of `place` at `listed`, its path from
@@ -5445,6 +5734,7 @@ impl App {
                 self.state.file = None;
                 self.state.asking_delete = false;
             }
+            Screen::Contact(_) => self.state.contacts.selected = None,
             // Changes not saved are given up only by going back again while
             // the warning shows.
             Screen::Editor => {
@@ -5792,6 +6082,11 @@ impl App {
                 vec![Effect::CheckSkyward]
             }
             Screen::Wlan if self.state.wlan.as_ref().is_some_and(|w| w.power == Power::On) => vec![Effect::ScanWlan],
+            Screen::Contacts => vec![Effect::ReadContacts],
+            // The call log names a number when the contacts hold it, so
+            // both of the provider's databases are read as it opens.
+            Screen::Calls => vec![Effect::ReadCalls, Effect::ReadContacts],
+            Screen::Signal => vec![Effect::ReadSignal],
             _ => Vec::new(),
         }
     }
@@ -6143,6 +6438,12 @@ impl App {
                 self.state.next_slot = Some(slot);
                 self.refresh();
             }
+            Action::Type(Cap::Ime) | Action::ToggleIme => {
+                // One keyboard for the whole recovery: the Chinese keys
+                // and the Latin ones are two faces of it.
+                self.toggle_ime();
+                return Vec::new();
+            }
             Action::Type(cap) if self.screen() == Screen::Terminal => return self.term_typed(cap),
             Action::Type(cap) if self.screen() == Screen::Editor => self.edit_typed(cap),
             Action::Type(cap) => return self.type_key(cap, now),
@@ -6172,6 +6473,52 @@ impl App {
                 self.state.search.clear();
                 self.edits += 1;
                 self.refresh();
+            }
+            Action::OpenContact(i) => {
+                let list = crate::pages::filtered(&self.state.contacts, &self.state.ime.digits);
+                if let Some(&real) = list.get(i) {
+                    self.state.contacts.selected = Some(real);
+                    self.open(Screen::Contact(real));
+                }
+            }
+            Action::ClearContacts => {
+                self.state.contacts.query.clear();
+                self.state.contacts.scroll = 0;
+                self.edits += 1;
+                self.refresh();
+            }
+            Action::RereadContacts => return vec![Effect::ReadContacts],
+            Action::RereadCalls => return vec![Effect::ReadCalls, Effect::ReadContacts],
+            Action::RereadSignal => return vec![Effect::ReadSignal],
+            Action::Nine(cap) => return self.nine_typed(cap, now),
+            Action::PickCharacter(i) => {
+                let at = self.state.ime.page * ime::CHOICES + i;
+                if let Some(word) = self.state.ime.choices.get(at).cloned() {
+                    self.type_word(&word);
+                    self.state.ime.digits.clear();
+                    self.state.ime.page = 0;
+                    self.state.contacts.scroll = 0;
+                    self.edits += 1;
+                    self.refresh_choices();
+                    self.refresh();
+                }
+            }
+            Action::TurnCharacters(by) => {
+                let pages = self.state.ime.choices.len().div_ceil(ime::CHOICES);
+                let at = self.state.ime.page as isize + by as isize;
+                self.state.ime.page = if pages == 0 { 0 } else { at.clamp(0, pages as isize - 1) as usize };
+                self.refresh();
+            }
+            Action::TurnPinyin => {
+                // The same keys spell several sounds; a finger turns to the
+                // next of them, as on a system keyboard.
+                let n = self.state.ime.spellings.len();
+                if n > 1 {
+                    self.state.ime.spell_at = (self.state.ime.spell_at + 1) % n;
+                    self.state.ime.page = 0;
+                    self.refresh_choices();
+                    self.refresh();
+                }
             }
             Action::OpenEntry(i) => {
                 let entry = self.state.files.entry(i).clone();
@@ -6424,6 +6771,7 @@ impl App {
                     Field::Password => &mut self.state.password,
                 }
             }
+            Screen::Contacts => &mut self.state.contacts.query,
             s => panic!("{s:?} has no text field"),
         }
     }
@@ -6539,6 +6887,9 @@ impl App {
             Cap::Enter => ed.newline(),
             Cap::Shift => self.state.layer = if layer == Layer::Shifted { Layer::Letters } else { Layer::Shifted },
             Cap::Show(shown) => self.state.layer = shown,
+            // The switch between the Chinese and the Latin keys is caught
+            // before a key ever reaches here.
+            Cap::Ime => {}
         }
         self.edits += 1;
         // The keyboard stays as it was while its keys do.
@@ -6553,7 +6904,7 @@ impl App {
     /// keyboard, which stays as it was.
     fn refresh_text(&mut self) {
         let t = self.theme();
-        self.refresh_rows(0, (t.m.h as f32 - widgets::keyboard_height(&t)).floor() as u32);
+        self.refresh_rows(0, pages::ime_top(&t, &self.state).floor() as u32);
     }
 
     /// A tap at page `x`, `y` on the editor's card puts the cursor between
@@ -6588,16 +6939,159 @@ impl App {
         if self.screen() == Screen::Editor {
             self.state.editor.as_mut().expect("the editor page shows a file").scroll(-rows);
             self.refresh_text();
+        } else if self.screen() == Screen::Contacts || self.screen() == Screen::Calls {
+            // A finger going up takes the list down to the people or calls
+            // further on. The page draws as many rows as fit and clamps the
+            // offset there, so gliding past the end simply comes to rest.
+            let (at, most) = match self.screen() {
+                Screen::Contacts => (&mut self.state.contacts.scroll, self.state.contacts.all.len()),
+                _ => (&mut self.state.calls_scroll, self.state.calls.len()),
+            };
+            *at = (*at as isize - rows).clamp(0, most as isize) as usize;
+            self.refresh();
         } else if let Some(term) = self.term.as_mut() {
             term.scroll(rows);
             self.refresh();
         }
     }
 
+    /// A key of the nine-key Chinese keyboard: the digits spell a sound,
+    /// the first character offered goes in on Enter, and the other keys do
+    /// what their counterparts on the Latin keyboard do.
+    /// Turn the Chinese keys into the Latin ones, and back. The choice is
+    /// the recovery's, not one page's: every field, shell and file answers
+    /// to the same switch.
+    fn toggle_ime(&mut self) {
+        self.state.ime.nine = !self.state.ime.nine;
+        self.state.ime.digits.clear();
+        self.state.ime.page = 0;
+        self.state.ime.spell_at = 0;
+        self.state.contacts.scroll = 0;
+        self.refresh_choices();
+        self.refresh();
+    }
+
+    /// Put a word into whatever the page is asking for: a field on the
+    /// screen, a shell, or a file being edited.
+    fn type_word(&mut self, word: &str) {
+        match self.screen() {
+            Screen::Terminal => {
+                for ch in word.chars() {
+                    self.term_typed(Cap::Char(ch));
+                }
+            }
+            Screen::Editor => {
+                for ch in word.chars() {
+                    self.edit_typed(Cap::Char(ch));
+                }
+            }
+            _ => {
+                for ch in word.chars() {
+                    self.typing().push(ch);
+                }
+                self.edits += 1;
+            }
+        }
+    }
+
+    /// Take away what was written last, wherever it was written.
+    fn type_backspace(&mut self) {
+        match self.screen() {
+            Screen::Terminal => {
+                self.term_typed(Cap::Backspace);
+            }
+            Screen::Editor => self.edit_typed(Cap::Backspace),
+            _ => {
+                self.typing().pop();
+                self.edits += 1;
+            }
+        }
+    }
+
+    /// A space, wherever the page is asking for one.
+    fn type_space(&mut self) {
+        match self.screen() {
+            Screen::Terminal => {
+                self.term_typed(Cap::Space);
+            }
+            Screen::Editor => self.edit_typed(Cap::Space),
+            _ => {
+                self.typing().push(' ');
+                self.edits += 1;
+            }
+        }
+    }
+
+    /// The return of the Chinese keys does what the page's own return does.
+    fn ime_enter(&mut self, now: u64) -> Vec<Effect> {
+        match self.screen() {
+            Screen::Contacts => self.act(Action::OpenContact(0), now),
+            Screen::Terminal => self.term_typed(Cap::Enter),
+            Screen::Editor => {
+                self.edit_typed(Cap::Enter);
+                Vec::new()
+            }
+            _ => self.act(Action::Type(Cap::Enter), now),
+        }
+    }
+
+    fn nine_typed(&mut self, cap: NineCap, now: u64) -> Vec<Effect> {
+        match cap {
+            NineCap::Digit(ch) if ('2'..='9').contains(&ch) => {
+                self.state.ime.digits.push(ch);
+                self.state.ime.page = 0;
+                self.state.ime.spell_at = 0;
+            }
+            NineCap::Backspace => {
+                if self.state.ime.digits.pop().is_none() {
+                    self.type_backspace();
+                    self.refresh();
+                    return Vec::new();
+                }
+                self.state.ime.spell_at = 0;
+            }
+            NineCap::Clear => {
+                self.state.ime.digits.clear();
+                self.state.ime.page = 0;
+                self.state.ime.spell_at = 0;
+            }
+            NineCap::Space => {
+                self.type_space();
+                self.refresh();
+                return Vec::new();
+            }
+            NineCap::Latin => {
+                self.state.ime.nine = false;
+                self.state.ime.digits.clear();
+                self.state.ime.page = 0;
+            }
+            NineCap::Enter => {
+                if !self.state.ime.digits.is_empty() {
+                    if let Some(word) = self.state.ime.choices.first().cloned() {
+                        self.type_word(&word);
+                        self.state.ime.digits.clear();
+                        self.state.ime.page = 0;
+                        self.edits += 1;
+                    }
+                } else {
+                    return self.ime_enter(now);
+                }
+            }
+            _ => {}
+        }
+        self.state.contacts.scroll = 0;
+        self.refresh_choices();
+        self.refresh();
+        Vec::new()
+    }
+
     /// A key of the on-screen keyboard. A capital lasts one letter; return
     /// opens the first result of a search, and runs a terminal's command.
     fn type_key(&mut self, cap: Cap, now: u64) -> Vec<Effect> {
         let (l, layer) = (self.state.lang, self.state.layer);
+        if self.screen() == Screen::Contacts {
+            self.state.contacts.scroll = 0;
+        }
         match cap {
             Cap::Char(ch) => {
                 let shifted = self.state.layer == Layer::Shifted;
@@ -6619,6 +7113,9 @@ impl App {
                 self.state.layer = if self.state.layer == Layer::Shifted { Layer::Letters } else { Layer::Shifted };
             }
             Cap::Show(layer) => self.state.layer = layer,
+            // The switch between the Chinese and the Latin keys is caught
+            // before a key ever reaches here.
+            Cap::Ime => {}
             Cap::Enter => match self.screen() {
                 Screen::Search => {
                     if let Some(first) = search::find_on(&self.state.search, l, |screen| self.state.offers(screen)).first() {
@@ -6700,7 +7197,7 @@ impl App {
         // while its keys do.
         if matches!(cap, Cap::Char(_) | Cap::Space | Cap::Backspace) && self.state.layer == layer {
             let t = self.theme();
-            self.refresh_rows(0, (t.m.h as f32 - widgets::keyboard_height(&t)).floor() as u32);
+            self.refresh_rows(0, pages::ime_top(&t, &self.state).floor() as u32);
         } else {
             self.refresh();
         }
@@ -6994,7 +7491,7 @@ impl App {
                     // A key of the keyboard, or one of the editor's and the
                     // terminal's own row, taps the motor as the system's own
                     // keyboard does.
-                    if self.state.vibrate && matches!(a, Action::Type(_) | Action::TermKey(_)) {
+                    if self.state.vibrate && matches!(a, Action::Type(_) | Action::Nine(_) | Action::TermKey(_)) {
                         fx.push(Effect::Haptic);
                     }
                     fx.extend(self.act(a, now));
@@ -7069,7 +7566,7 @@ impl App {
         // A key of the on-screen keyboard, or a choice of a list open over
         // the page, shows held down while the finger rests on it.
         let held = match self.drag {
-            Drag::Press { action: Some(a @ (Action::Type(_) | Action::PickSecurity(_))), .. } => Some(a),
+            Drag::Press { action: Some(a @ (Action::Type(_) | Action::Nine(_) | Action::PickSecurity(_))), .. } => Some(a),
             _ => None,
         };
         if held != self.state.held {

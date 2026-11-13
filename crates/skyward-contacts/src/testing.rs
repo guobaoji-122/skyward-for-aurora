@@ -108,7 +108,8 @@ pub fn make_calls(path: &Path, calls: &[(&str, i64, i64, i64)]) {
              type INTEGER,
              deleted INTEGER NOT NULL DEFAULT 0,
              features INTEGER,
-             subscription_id INTEGER);",
+             subscription_id INTEGER,
+             name TEXT);",
     )
     .expect("make the table of calls");
     for (number, at, seconds, kind) in calls {

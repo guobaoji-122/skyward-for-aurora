@@ -1004,10 +1004,37 @@ fn read_slots() -> Result<skyward_vab::BootSlots, String> {
     read().map_err(|e| format!("{e:#}"))
 }
 
+/// What the phone's radio is doing: the cards it serves, what each card's
+/// radio is called, and what it says of itself.
+fn read_signal() -> Result<skyward_ui::app::Signal, String> {
+    let read = || -> Result<skyward_ui::app::Signal> {
+        let binder = skyward_binder::driver::Binder::open()?;
+        let cards = skyward_radio::cards(&binder)?;
+        let mut signal = skyward_ui::app::Signal {
+            cards: cards.clone(),
+            programs: skyward_radio::programs(),
+            ..Default::default()
+        };
+        for slot in &cards {
+            let radio = skyward_radio::Radio::open(&binder, *slot)?;
+            let names = radio.names();
+            if !names.is_empty() {
+                signal.radios.push((*slot, names));
+            }
+            if let Ok(c) = radio.configuration() {
+                if !c.version.is_empty() {
+                    signal.version = Some(c.version);
+                }
+            }
+        }
+        Ok(signal)
+    };
+    read().map_err(|e| format!("{e:#}"))
+}
+
 /// What every vbmeta block the running slot keeps says about the checks it
 /// names.
-fn read_avb() -> Result<Vec<skyward_vab::avb::Reading>, String> {
-    let read = || -> Result<Vec<skyward_vab::avb::Reading>> {
+fn read_avb() -> Result<Vec<skyward_vab::avb::Reading>, String> {    let read = || -> Result<Vec<skyward_vab::avb::Reading>> {
         let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
         skyward_vab::avb::read(slot)
     };
@@ -2573,6 +2600,51 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         }
                     },
                     Effect::ReadMounts => app.set_mounts(mounts()),
+                    Effect::ReadContacts => {
+                        // A line written to the kernel log is a diagnostic,
+                        // never a reason to leave the pages. The reason a
+                        // reading failed can be long, and the page shows it.
+                        let _ = skyward_sys::kmsg("reading the provider's contacts");
+                        let got = skyward_contacts::read_contacts().map_err(|e| format!("{e:#}"));
+                        match &got {
+                            Ok(people) => {
+                                let _ = skyward_sys::kmsg(&format!("the provider knows {} people", people.len()));
+                            }
+                            Err(why) => {
+                                let _ = skyward_sys::kmsg(&format!("the provider's contacts could not be read: {why}"));
+                            }
+                        }
+                        app.set_contacts(got);
+                    }
+                    Effect::ReadCalls => {
+                        let _ = skyward_sys::kmsg("reading the provider's record of calls");
+                        let got = skyward_contacts::read_calls(300).map_err(|e| format!("{e:#}"));
+                        match &got {
+                            Ok(calls) => {
+                                let _ = skyward_sys::kmsg(&format!("the provider recorded {} calls", calls.len()));
+                            }
+                            Err(why) => {
+                                let _ = skyward_sys::kmsg(&format!("the provider's calls could not be read: {why}"));
+                            }
+                        }
+                        app.set_calls(got);
+                    }
+                    Effect::ReadSignal => {
+                        let _ = skyward_sys::kmsg("asking the phone what its radio is doing");
+                        let got = read_signal();
+                        match &got {
+                            Ok(s) => {
+                                let _ = skyward_sys::kmsg(&format!(
+                                    "the phone has {} card(s) with a radio",
+                                    s.cards.len()
+                                ));
+                            }
+                            Err(why) => {
+                                let _ = skyward_sys::kmsg(&format!("the radio did not answer: {why}"));
+                            }
+                        }
+                        app.set_signal(got);
+                    }
                     Effect::ReadSlots => app.set_boot_slots(read_slots()),
                     Effect::ReadAvb => app.set_avb(read_avb(), verity_mode()),
                     // Both checks are written across every vbmeta block the

@@ -17,6 +17,7 @@ members = [
     "crates/skyward-mtp",
     "crates/skyward-net",
     "crates/skyward-preview",
+    "crates/skyward-radio",
     "crates/skyward-pack",
     "crates/skyward-sys",
     "crates/skyward-lp",

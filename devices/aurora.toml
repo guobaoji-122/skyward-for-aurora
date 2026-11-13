@@ -252,6 +252,51 @@ user = "root"
 groups = ["root"]
 optional = true
 
+# The radio. Two pieces of the phone's own run this, in this order, and
+# neither is started by the phone's init until the system asks for them:
+#
+# rmt_storage loads the modem's firmware into the modem, out of the modem
+# partition the recovery mounts as its firmware. It is what makes the
+# modem itself exist; without it there is no radio to talk to at all. The
+# phone's init runs it as root, but the process that is left running is
+# the one that gave up its rights and became nobody (uid 9999), which is
+# what the phone's own /proc showed; it is started as root here, as init
+# does, and drops its rights itself.
+#
+# qcrilNrd is the radio's own daemon: it registers the radio's interfaces
+# with the service directory, and it is what answers when the phone's
+# radio is asked anything. The phone runs it as radio, in the groups its
+# own init names, with the capabilities its own init gives it.
+#
+# The phone has two cards (persist.radio.multisim.config=dsds), and the
+# phone's init starts a daemon for each: the second with "-c 2", which
+# tells it which card it serves. Both are started here, and both are
+# optional: a phone whose radio does not come up still boots, and the
+# reason is in the log.
+[[service]]
+path = "/vendor/bin/rmt_storage"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"]
+user = "root"
+groups = ["root"]
+optional = true
+
+[[service]]
+path = "/vendor/bin/hw/qcrilNrd"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"]
+user = "radio"
+groups = ["radio", "cache", "inet", "misc", "audio", "log", "readproc", "wakelock", "oem_2901", "oem_2912"]
+capabilities = ["BLOCK_SUSPEND", "NET_ADMIN", "NET_RAW"]
+optional = true
+
+[[service]]
+path = "/vendor/bin/hw/qcrilNrd"
+args = ["-c", "2"]
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"]
+user = "radio"
+groups = ["radio", "cache", "inet", "misc", "audio", "log", "readproc", "wakelock", "oem_2901", "oem_2912"]
+capabilities = ["BLOCK_SUSPEND", "NET_ADMIN", "NET_RAW"]
+optional = true
+
 # WLAN: the kiwi node in the device tree, driven by qca_cld3_kiwi_v2, the
 # one WLAN driver the phone's own modules.blocklist leaves of those its
 # modules.load lists. Its cfg80211 asks for rfkill, one of the kernel's own

@@ -98,6 +98,9 @@ impl Term {
                 self.ctrl = ctrl;
                 Vec::new()
             }
+            // The switch between the Chinese and the Latin keys is caught
+            // before a key ever reaches the shell.
+            Cap::Ime => Vec::new(),
         }
     }
 
