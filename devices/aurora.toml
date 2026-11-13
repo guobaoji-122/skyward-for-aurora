@@ -68,7 +68,7 @@ groups = ["root"]
 # and the key service is what the data partition opens with.
 [[service]]
 path = "/system/bin/sh"
-args = ["-c", "mkdir -p /kmlibs && cp /mnt/system/system/lib64/libhardware.so /mnt/system/system/lib64/libvndksupport.so /mnt/system/system/lib64/libnetutils.so /mnt/system/system/lib64/bootstrap/libdl_android.so /kmlibs/ && printf '[recovery]\\nnamespace.default.isolated = false\\n' > /kmlibs/ld.config.txt && printf '#!/system/bin/sh\\nexport LD_CONFIG_FILE=/kmlibs/ld.config.txt\\nexec \"$@\"\\n' > /kmlibs/km.sh && chmod 755 /kmlibs/km.sh"]
+args = ["-c", "mkdir -p /kmlibs && cp /mnt/system/system/lib64/libhardware.so /mnt/system/system/lib64/libvndksupport.so /mnt/system/system/lib64/libdmabufheap.so /mnt/system/system/lib64/libc++.so /mnt/system/system/lib64/libnetutils.so /mnt/system/system/lib64/bootstrap/libdl_android.so /kmlibs/ && cp /mnt/system/system/lib64/libc++_shared.so /kmlibs/ 2>/dev/null || true && printf '[recovery]\\nnamespace.default.isolated = false\\n' > /kmlibs/ld.config.txt && printf '#!/system/bin/sh\\nexport LD_CONFIG_FILE=/kmlibs/ld.config.txt\\nexec \"$@\"\\n' > /kmlibs/km.sh && chmod 755 /kmlibs/km.sh && chmod 755 /kmlibs && chmod 644 /kmlibs/*.so /kmlibs/ld.config.txt && chmod 755 /kmlibs/km.sh"]
 oneshot = true
 user = "root"
 groups = ["root"]
@@ -290,20 +290,43 @@ groups = ["root"]
 optional = true
 
 [[service]]
-path = "/vendor/bin/hw/qcrilNrd"
-libraries = ["/mnt/system/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/kmlibs"]
+path = "/kmlibs/km.sh"
+args = ["/vendor/bin/hw/qcrilNrd"]
+libraries = ["/kmlibs", "/mnt/system/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/system/lib64", "/odm/lib64", "/apex/com.android.i18n/lib64", "/apex/com.android.vndk.v34/lib64"]
 user = "radio"
 groups = ["radio", "cache", "inet", "misc", "audio", "log", "readproc", "wakelock", "oem_2901", "oem_2912"]
 capabilities = ["BLOCK_SUSPEND", "NET_ADMIN", "NET_RAW"]
 optional = true
 
 [[service]]
-path = "/vendor/bin/hw/qcrilNrd"
-args = ["-c", "2"]
-libraries = ["/mnt/system/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/kmlibs"]
+path = "/kmlibs/km.sh"
+args = ["/vendor/bin/hw/qcrilNrd", "-c", "2"]
+libraries = ["/kmlibs", "/mnt/system/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/system/lib64", "/odm/lib64", "/apex/com.android.i18n/lib64", "/apex/com.android.vndk.v34/lib64"]
 user = "radio"
 groups = ["radio", "cache", "inet", "misc", "audio", "log", "readproc", "wakelock", "oem_2901", "oem_2912"]
 capabilities = ["BLOCK_SUSPEND", "NET_ADMIN", "NET_RAW"]
+optional = true
+
+# ntn_rild: the satellite (NTN / 天通) RIL daemon. Per /odm/etc/init/ntn_rild.rc it
+# runs as root with -s <slot> and needs the same linker setup as qcrilNrd (it too
+# pulls libqcrilNr / libsqlite, hence the apex lib dirs). It only comes up when the
+# satellite modem stack is present; in recovery it may exit 0 if that stack is down.
+[[service]]
+path = "/kmlibs/km.sh"
+args = ["/odm/bin/hw/ntn_rild", "-s", "1"]
+libraries = ["/kmlibs", "/mnt/system/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/system/lib64", "/odm/lib64", "/apex/com.android.i18n/lib64", "/apex/com.android.vndk.v34/lib64"]
+user = "root"
+groups = ["system", "root", "radio", "cache", "inet", "misc", "audio", "log", "readproc", "wakelock"]
+capabilities = ["BLOCK_SUSPEND"]
+optional = true
+
+[[service]]
+path = "/kmlibs/km.sh"
+args = ["/odm/bin/hw/ntn_rild", "-s", "2"]
+libraries = ["/kmlibs", "/mnt/system/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/system/lib64", "/odm/lib64", "/apex/com.android.i18n/lib64", "/apex/com.android.vndk.v34/lib64"]
+user = "root"
+groups = ["system", "root", "radio", "cache", "inet", "misc", "audio", "log", "readproc", "wakelock"]
+capabilities = ["BLOCK_SUSPEND"]
 optional = true
 
 # WLAN: the kiwi node in the device tree, driven by qca_cld3_kiwi_v2, the
