@@ -65,8 +65,16 @@ fn read_piece(read: &mut skyward_binder::parcel::Reader<'_>, kind: &str) -> Opti
     if read.i32().ok()? == 0 {
         return None;
     }
-    // Then its own length, and then its numbers.
-    let end = read.structure().ok()?;
+    // Each piece is written as a flag saying whether it is there, and
+    // then how long it is. The length counts its own four bytes, as the
+    // parcel writes every structure of this kind. The flag has already
+    // been read, so only the length is left to take here.
+    let at = read.here();
+    let size = read.i32().ok()?;
+    if size < 4 {
+        return None;
+    }
+    let end = at + size as usize;
     let mut out = Reading { technology: kind.to_string(), ..Reading::default() };
     match kind {
         "gsm" => {
@@ -130,11 +138,18 @@ mod tests {
     use super::*;
 
     /// Write the structure the way a parcel carries it: a flag saying
-    /// whether it is there, its length, and then its body.
+    /// whether it is there, its length, and then its body. The length
+    /// counts its own four bytes, as an AIDL parcelable writes it.
     fn structure(body: &[u8]) -> Vec<u8> {
+        piece_bytes(body)
+    }
+
+    /// Write one structure: the flag saying it is there, its length, and
+    /// its body. The length counts its own four bytes.
+    fn piece_bytes(body: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&1i32.to_le_bytes());
-        out.extend_from_slice(&(body.len() as i32).to_le_bytes());
+        out.extend_from_slice(&((body.len() + 4) as i32).to_le_bytes());
         out.extend_from_slice(body);
         out
     }
@@ -146,11 +161,7 @@ mod tests {
         for n in numbers {
             body.extend_from_slice(&n.to_le_bytes());
         }
-        let mut out = Vec::new();
-        out.extend_from_slice(&1i32.to_le_bytes());
-        out.extend_from_slice(&(body.len() as i32).to_le_bytes());
-        out.extend_from_slice(&body);
-        out
+        piece_bytes(&body)
     }
 
     /// The flag that says a piece is not there.
@@ -196,11 +207,16 @@ mod tests {
 
     #[test]
     fn a_signal_of_the_fifth_generation_is_read_by_its_dbm() {
-        let mut nr = piece(&[-100, 0, 0, 0, 0, 0, 0]);
+        let mut body = Vec::new();
+        for n in [-100i32, 0, 0, 0, 0, 0, 0] {
+            body.extend_from_slice(&n.to_le_bytes());
+        }
         // The reported quality is a list of bytes, written as a length
-        // and then the bytes.
-        nr.extend_from_slice(&0i32.to_le_bytes());
-        nr.extend_from_slice(&0i32.to_le_bytes());
+        // and then the bytes, followed by one last number. Both belong
+        // to the piece, so its length counts them too.
+        body.extend_from_slice(&0i32.to_le_bytes());
+        body.extend_from_slice(&0i32.to_le_bytes());
+        let nr = piece_bytes(&body);
         let body = [
             absent(),
             absent(),

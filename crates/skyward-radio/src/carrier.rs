@@ -81,7 +81,8 @@ impl Carrier {
         if name.is_empty() {
             return None;
         }
-        let has = |words: [&str; 3]| words.iter().any(|w| name.contains(w));
+        let folded = name.to_lowercase();
+        let has = |words: [&str; 3]| words.iter().any(|w| folded.contains(&w.to_lowercase()));
         if has(["移动", "移动通", "Mobile"]) {
             Some(Carrier::Mobile)
         } else if has(["联通", "聯通", "Unicom"]) {
