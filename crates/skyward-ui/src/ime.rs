@@ -262,8 +262,18 @@ pub fn spellings(digits: &str) -> Vec<String> {
     let mut found: Vec<(usize, usize, String)> = Vec::new();
     let mut parts: Vec<String> = Vec::new();
     walk_sounds(digits, 0, syl, &mut parts, 0, &mut found);
-    found.sort_by_key(|(rank, count, _)| (*rank, *count));
     found.dedup_by(|a, b| a.2 == b.2);
+    // A sound the keys spell exactly, the whole sequence as one syllable, is
+    // kept ahead of the longer readings it can also be cut into, so it is
+    // never crowded out of the short list: `94264` is `zhang` and `xiang`
+    // alike. Within each group the commoner sound (the higher commonness)
+    // leads, so the likeliest reading comes first.
+    let is_exact = |said: &str| said.split_whitespace().count() == 1 && t9(said) == digits;
+    found.sort_by(|a, b| match (is_exact(&a.2), is_exact(&b.2)) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => b.0.cmp(&a.0),
+    });
     found.into_iter().take(8).map(|(_, _, said)| said).collect()
 }
 
