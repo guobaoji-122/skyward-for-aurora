@@ -289,6 +289,67 @@ user = "root"
 groups = ["root"]
 optional = true
 
+# The modem is a processor of its own, and on this phone it is not running:
+# the radio's daemon finds no QMI service at all without it, and so it never
+# gets as far as registering the radio's interfaces with the service
+# directory. Nothing in the recovery starts it.
+#
+# Its firmware is also not where the recovery would look for it. The partition
+# the recovery mounts as the firmware holds the modem's *settings* and the
+# firmware of the other processors; the modem's own image lives in a partition
+# of its own, modemfirmware, and there it is under its own name (modem.mdt and
+# the segments beside it), not under the identifiers the recovery's other
+# firmware carries.
+#
+# So the partition is mounted, the folder the modem's image is in is added to
+# the folders the kernel's firmware loader looks in (the loader is told where
+# to look rather than being given the image by hand: it asks for each segment
+# by name), and the processor is asked to start. The loader also wants the
+# image of the IPA's own firmware, which is in the partition the recovery
+# already mounts and is already in the loader's way.
+#
+# A step that cannot be done says why and steps aside: a phone whose modem
+# partition is named differently still boots, and the radio's page says the
+# modem did not come up.
+[[service]]
+path = "/system/bin/sh"
+args = ["-c", "P=/dev/block/bootdevice/by-name/modemfirmware_a; mkdir -p /mnt/modemfw; mount -o ro $P /mnt/modemfw 2>/dev/null || mount -o ro $P /mnt/modemfw 2>/dev/null || true; if [ -f /mnt/modemfw/image/modem.mdt ]; then echo /mnt/modemfw/image > /sys/module/firmware_class/parameters/path 2>/dev/null; echo -n modem.mdt > /sys/class/remoteproc/remoteproc1/firmware 2>/dev/null; echo start > /sys/class/remoteproc/remoteproc1/state 2>/dev/null; echo the modem was asked to start; else echo no modem image in the modemfirmware partition; fi; exit 0"]
+oneshot = true
+user = "root"
+groups = ["root"]
+
+# The data path the radio's own daemon needs: the modules that carry the
+# packets between the modem and the phone. They are a chain, each one wanting
+# the symbols of the one before it, and the copies in the vendor partition are
+# built for another kernel and cannot resolve them; the ones in the dlkm
+# partition are the ones that match this kernel.
+#
+# The chain is: the memory manager, the GSI driver, the IPA's manager (which
+# is what the rest of them ask for their symbols), the controller, the core
+# itself, and the parts that hang off it. The order is not a choice -- each
+# module wants the symbols of the one before it, and a module loaded out of
+# turn is refused. A module that cannot be loaded is skipped and the rest are
+# tried: the radio's page then says the modem is up and the data path is not,
+# which is a different thing to say than nothing at all.
+[[service]]
+path = "/system/bin/sh"
+args = ["-c", "D=/vendor_dlkm/lib/modules; for m in rmnet_mem gsim ipam rmnet_ctl rmnet_core rmnet_aps rmnet_offload rmnet_perf rmnet_sch rmnet_shs rmnet_wlan; do if [ -f $D/$m.ko ]; then insmod $D/$m.ko 2>/dev/null || true; fi; done; echo the data path modules were asked to load; exit 0"]
+oneshot = true
+user = "root"
+groups = ["root"]
+
+# The processor the sound runs on, which the recovery leaves off as well. Its
+# image is in the partition the recovery mounts as the firmware, under its own
+# name; it is laid where the loader looks and the processor is asked to start.
+# The recovery has no sound server of its own, so nothing listens to it yet --
+# but a processor that is off cannot be listened to either.
+[[service]]
+path = "/system/bin/sh"
+args = ["-c", "for f in /firmware/image/cdsp.*; do ln -sf $f /lib/firmware/$(basename $f); done; echo -n cdsp.mdt > /sys/class/remoteproc/remoteproc2/firmware 2>/dev/null; echo start > /sys/class/remoteproc/remoteproc2/state 2>/dev/null; echo the sound processor was asked to start; exit 0"]
+oneshot = true
+user = "root"
+groups = ["root"]
+
 [[service]]
 path = "/kmlibs/km.sh"
 args = ["/vendor/bin/hw/qcrilNrd"]
