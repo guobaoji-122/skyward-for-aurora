@@ -461,20 +461,20 @@ pub fn kmsg(line: &str) -> Result<()> {
     // boundaries, and keep a line break out of what the kernel reads: one
     // write is one record there.
     const CHUNK: usize = 800;
-    let flat = line.replace('\n', " ").replace('\r', " ");
+    let flat = line.replace(['\n', '\r'], " ");
     if let Ok(mut f) = OpenOptions::new().write(true).open("/dev/kmsg") {
         let mut part = String::new();
         for ch in flat.chars() {
             if part.len() + ch.len_utf8() > CHUNK {
                 // A log that would not take this line is no reason to end
                 // the work that wrote it.
-                let _ = write!(f, "<6>skyward: {part}\n");
+                let _ = writeln!(f, "<6>skyward: {part}");
                 part.clear();
             }
             part.push(ch);
         }
         if !part.is_empty() || flat.is_empty() {
-            let _ = write!(f, "<6>skyward: {part}\n");
+            let _ = writeln!(f, "<6>skyward: {part}");
         }
     }
     // The stamp is made once, so both files say the same thing. A clock that
