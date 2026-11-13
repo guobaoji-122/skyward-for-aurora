@@ -1788,12 +1788,9 @@ pub struct Queued {
     pub source: Source,
 }
 
-/// Choices the pages show and the user changes, and where installing
-/// stands.
-#[derive(Clone, Debug, PartialEq)]
 /// The contacts page's state: the people read from the provider, the search
 /// typed into its field, and the one whose page is open.
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ContactsPage {
     /// Everyone the provider knows, read once as the page opens, after the
     /// data partition has opened.
@@ -1845,7 +1842,8 @@ pub struct Cell {
 /// being spelled on the nine keys, and the page of characters offered for
 /// it.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Ime {    pub nine: bool,
+pub struct Ime {
+    pub nine: bool,
     pub digits: String,
     pub page: usize,
     /// Words and characters the sound offers, worked out when it changes.
@@ -1858,6 +1856,9 @@ pub struct Ime {    pub nine: bool,
     pub spelling: String,
 }
 
+/// Choices the pages show and the user changes, and where installing
+/// stands.
+#[derive(Clone, Debug, PartialEq)]
 pub struct State {
     /// The language the pages speak.
     pub lang: Lang,
