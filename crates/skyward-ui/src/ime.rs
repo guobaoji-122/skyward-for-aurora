@@ -215,7 +215,7 @@ fn syllables_of(word: &str) -> Vec<String> {
     while at < full.len() {
         let mut hit: Option<&str> = None;
         for (py, _, _) in syl {
-            if full[at..].starts_with(py) && hit.map_or(true, |h| py.len() > h.len()) {
+            if full[at..].starts_with(py) && hit.is_none_or(|h| py.len() > h.len()) {
                 hit = Some(py);
             }
         }
@@ -294,7 +294,7 @@ fn walk_sounds(
     whole.sort_by_key(|(_, _, r)| *r);
     other.sort_by_key(|(_, _, r)| *r);
     other.truncate(6);
-    let here = whole.into_iter().chain(other.into_iter());
+    let here = whole.into_iter().chain(other);
     for (py, code, own) in here {
         if code.len() <= rest.len() {
             // The sound is typed out whole: what may follow it is looked

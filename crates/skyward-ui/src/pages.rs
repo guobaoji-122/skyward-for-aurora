@@ -4916,7 +4916,7 @@ fn call_length(seconds: i64) -> String {
 /// The name of the other end of a call. The runtime gives every call its
 /// name when the two readings arrive, so a page only reads that answer and
 /// never compares the number against the whole phonebook again.
-fn caller<'a>(l: Lang, call: &'a skyward_contacts::Call) -> &'a str {
+fn caller(l: Lang, call: &skyward_contacts::Call) -> &str {
     if !call.name.is_empty() {
         return call.name.as_str();
     }
