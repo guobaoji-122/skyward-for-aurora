@@ -948,4 +948,9 @@ mod tests {
         let nezha = DeviceConfig::parse(include_str!("../../../devices/nezha.toml")).unwrap();
         assert!(nezha.services[0].uses(Path::new("/vendor")), "its shell and its libraries are the vendor partition's");
     }
+
+    #[test]
+    fn parses_aurora() {
+        DeviceConfig::parse(include_str!("../../../devices/aurora.toml")).unwrap();
+    }
 }
