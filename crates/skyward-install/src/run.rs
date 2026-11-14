@@ -17,6 +17,7 @@ use crate::script::{self, Bar, Request};
 use crate::signature::{self, Verdict};
 use crate::{Command, Event, Failure, Options, Outcome, Reflash, Refusal, Stage, ENGINE_LOG, SCRIPT_LOG};
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use skyward_sys::worker::{Teller, Worker};
 use skyward_sys::{kmsg, prop};
 use skyward_vab::{Slot, SlotMaps, SnapshotState};
 use std::collections::HashSet;
@@ -29,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// What runs right before update_engine or an install script starts
@@ -49,21 +50,8 @@ const RETRY: &str = "retry";
 /// Scripts written for other recoveries start with the shell they find
 /// here, and look for programs where those recoveries keep them.
 const SBIN_SHELL: &str = "/sbin/sh";
-const SBIN_BASH: &str = "/sbin/bash";
 const SHELL: &str = "/system/bin/sh";
 const SCRIPT_PATH: &str = "/sbin:/system/bin:/system/xbin";
-
-/// Where a package's own tools are put. `/sbin` and not `/tmp`: the install
-/// scripts of the packages that write whole partitions start by clearing
-/// `/tmp`, and then call the unpacker they shipped — `7za`, `zstd` — by name.
-const TOOLS: &str = "/sbin";
-
-/// Where the answer to `getVolumeKey` goes.
-const VOLUME_KEY: &str = "/sbin/getVolumeKey";
-
-/// The largest file taken out of a package's `bin/`, so a package cannot
-/// fill the recovery's memory with what it calls a tool.
-const TOOL_LIMIT: u64 = 64 << 20;
 
 /// How long what an install script leaves running may keep its output open
 /// once the script has ended, before it is ended too; and after that, how
@@ -74,12 +62,10 @@ const LINGER: Duration = Duration::from_secs(1);
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 
 pub struct Installer {
-    events: Receiver<Event>,
     commands: Sender<Command>,
-    /// Readable while events wait.
-    wake: OwnedFd,
     shared: Arc<Shared>,
-    thread: Option<JoinHandle<()>>,
+    /// The screen lets it go once it has finished.
+    worker: Worker<Event>,
 }
 
 impl Installer {
@@ -123,40 +109,26 @@ impl Installer {
         options: Options,
         work: impl FnOnce(&mut Context) -> Outcome + Send + 'static,
     ) -> Result<Installer> {
-        let (wake, signal) = pipe(libc::O_NONBLOCK)?;
-        let (event_tx, events) = mpsc::channel();
         let (commands, command_rx) = mpsc::channel();
         let shared = Arc::new(Shared::default());
-        let mut ctx = Context {
-            events: event_tx,
-            signal,
-            commands: command_rx,
-            shared: shared.clone(),
-            detach: Some(detach),
-            options,
-            origin,
-            package: None,
-        };
-        let thread = thread::Builder::new()
-            .name("installer".into())
-            .spawn(move || {
-                let outcome = work(&mut ctx);
-                let _ = kmsg(&format!("install: {outcome:?}"));
-                ctx.send(Event::Finished(outcome));
-            })
-            .context("start the installer")?;
-        Ok(Installer { events, commands, wake, shared, thread: Some(thread) })
+        let theirs = shared.clone();
+        let worker = Worker::start("installer", move |events| {
+            let mut ctx = Context { events, commands: command_rx, shared: theirs, detach: Some(detach), options, origin };
+            let outcome = work(&mut ctx);
+            let _ = kmsg(&format!("install: {outcome:?}"));
+            ctx.send(Event::Finished(outcome));
+        })?;
+        Ok(Installer { commands, shared, worker })
     }
 
+    /// Readable while events wait.
     pub fn fd(&self) -> RawFd {
-        self.wake.as_raw_fd()
+        self.worker.fd()
     }
 
     /// The events since the last call.
     pub fn events(&self) -> Vec<Event> {
-        let mut drain = [0u8; 64];
-        while unsafe { libc::read(self.wake.as_raw_fd(), drain.as_mut_ptr().cast(), drain.len()) } > 0 {}
-        self.events.try_iter().collect()
+        self.worker.events()
     }
 
     /// Write the image the installer holds to `partition` in `slots`.
@@ -195,15 +167,6 @@ impl Installer {
     }
 }
 
-impl Drop for Installer {
-    /// The screen lets the installer go once it has finished.
-    fn drop(&mut self) {
-        if let Some(thread) = self.thread.take() {
-            thread.join().expect("the installer does not panic");
-        }
-    }
-}
-
 /// Where the package comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Origin {
@@ -218,27 +181,17 @@ enum Origin {
 }
 
 struct Context {
-    events: Sender<Event>,
-    /// The write end of the wake pipe.
-    signal: OwnedFd,
+    events: Teller<Event>,
     commands: Receiver<Command>,
     shared: Arc<Shared>,
     detach: Option<Detach>,
     options: Options,
     origin: Origin,
-    /// Where the package is, when the phone holds it as a file: the path the
-    /// install script is told, so that it reads the package where it lies and
-    /// under the name it has. A package the computer sends has no such path,
-    /// and the script is told the mount the bytes are served at instead.
-    package: Option<PathBuf>,
 }
 
 impl Context {
     fn send(&self, event: Event) {
-        if self.events.send(event).is_ok() {
-            // A full pipe already wakes the screen.
-            unsafe { libc::write(self.signal.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
-        }
+        self.events.tell(event);
     }
 }
 
@@ -322,11 +275,6 @@ fn run_file(ctx: &mut Context, path: &Path) -> Outcome {
         Err(e) => return Outcome::Failed(Failure::Unreadable(format!("{e:#}"))),
     };
     let _ = kmsg(&format!("install: {}, {} bytes", path.display(), offer.size));
-    // The script is told where the package is, so it reads it there and under
-    // the name the phone gave it rather than through the mount: a package the
-    // phone holds is read twice by the script, and once through a mount whose
-    // every block is checked is twice the work.
-    ctx.package = Some(path.to_path_buf());
     serve_local(ctx, file, offer, path)
 }
 
@@ -597,33 +545,6 @@ fn detach_once(ctx: &mut Context) -> Result<()> {
     }
 }
 
-/// Move off the installed system before a script writes, letting go of what
-/// a script can safely write under: a partition still mounted read-only
-/// never writes back, so its blocks may be overwritten beneath it. One still
-/// mounted writable would put its own bytes back over the new ones, and
-/// stops the install. Not wired into the script path yet.
-#[expect(dead_code)]
-fn detach_for_script(ctx: &mut Context, slot: skyward_vab::Slot) -> Result<()> {
-    let Err(failure) = detach_once(ctx) else { return Ok(()) };
-    let mut writable = Vec::new();
-    let mut staying = 0;
-    for m in skyward_vab::mounted_partitions(slot)? {
-        match skyward_block::mount::read_only(&m.mount_point)? {
-            Some(true) => staying += 1,
-            Some(false) => writable.push(m.mount_point.display().to_string()),
-            // Gone since: it did come off, and is nothing to allow for.
-            None => {}
-        }
-    }
-    if !writable.is_empty() {
-        return Err(failure).with_context(|| format!("and {} would be written under", writable.join(", ")));
-    }
-    kmsg(&format!(
-        "install: {staying} partition(s) stayed mounted read-only, and their blocks are written under them"
-    ))?;
-    Ok(())
-}
-
 fn describe(package: &Package) -> String {
     match package {
         Package::Update(u) => format!("an update to {}", u.version().unwrap_or("an unnamed version")),
@@ -762,7 +683,7 @@ enum Line {
 /// Run update_engine on the package, telling the screen how far it is,
 /// and give its exit code.
 fn apply<S>(ctx: &Context, mount: &Mount<S>, update: &Update) -> Result<i32> {
-    let (status_read, status_write) = pipe(0)?;
+    let (status_read, status_write) = pipe()?;
     let status_fd = status_write.as_raw_fd();
     let mut command = std::process::Command::new(ota::PROGRAM);
     command
@@ -796,10 +717,6 @@ fn apply<S>(ctx: &Context, mount: &Mount<S>, update: &Update) -> Result<i32> {
     });
     let logged = thread::spawn(move || {
         lines(stderr, |line| {
-            // The engine's own words are the only explanation it gives, and
-            // the file here goes with the restart: each line goes to the
-            // kernel log too, where it outlives it.
-            let _ = kmsg(&format!("engine: {line}"));
             if let Some(l) = ota::log(line) {
                 let _ = tx.send(Line::Log(l));
             }
@@ -840,9 +757,6 @@ fn apply<S>(ctx: &Context, mount: &Mount<S>, update: &Update) -> Result<i32> {
     let ended = child.wait().context("wait for update_engine")?;
     status.join().expect("the status reader does not panic").context("read update_engine's status")?;
     logged.join().expect("the log reader does not panic").context("read update_engine's log")?;
-    if ended.code() != Some(0) {
-        let _ = kmsg(&format!("install: why the engine stopped is in {ENGINE_LOG}, which a restart takes away"));
-    }
     match (ended.code(), error) {
         (_, Some(code)) => Ok(code),
         (Some(code), None) => Ok(code),
@@ -927,8 +841,6 @@ fn run_script(ctx: &mut Context, size: u64) -> Result<Done> {
     }
     let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
     extract_script()?;
-    let package_tools = extract_tools()?;
-    shim_volume_key()?;
     shell_at_sbin()?;
     let kept = hold(ctx, slot)?;
     installed_boot_set()?;
@@ -944,7 +856,7 @@ fn run_script(ctx: &mut Context, size: u64) -> Result<Done> {
     };
     let mounted = skyward_block::mount::mount_ids()?;
     let ran = run_binary(ctx);
-    if let Err(e) = clean_up(&mounted, &mapped, &package_tools) {
+    if let Err(e) = clean_up(&mounted, &mapped) {
         let _ = kmsg(&format!("install: not all the script left behind was taken away: {e:#}"));
     }
     // What the script wrote over goes back however it ended, and so does
@@ -991,90 +903,17 @@ fn extract_script() -> Result<()> {
     out.set_permissions(fs::Permissions::from_mode(0o755)).with_context(|| format!("make {BINARY} runnable"))
 }
 
-/// Put the tools a package carries where its script looks for them.
-///
-/// A package that writes whole partitions carries the unpacker it needs,
-/// because no recovery is expected to have `7za`; its script calls it by
-/// name and stops halfway without it — after the partitions it wrote before
-/// it. A name this recovery already answers to is left alone: a package may
-/// add a tool, not stand in for one of ours.
-///
-/// Returns the list of tool names that were newly created, so the caller
-/// can clean them up when the install finishes. Leftover tools from a
-/// previous package would otherwise be picked up by the next one.
-fn extract_tools() -> Result<Vec<String>> {
-    let zip = File::open(fuse::PACKAGE).context("open the package")?;
-    let mut zip = zip::ZipArchive::new(BufReader::new(zip)).context("read the zip directory")?;
-    let mut taken = Vec::new();
-    for i in 0..zip.len() {
-        let Ok(mut entry) = zip.by_index(i) else { continue };
-        let name = entry.name().to_string();
-        let Some(tool) = name.strip_prefix("bin/") else { continue };
-        if tool.is_empty() || tool.contains('/') || !entry.is_file() || entry.size() > TOOL_LIMIT {
-            continue;
-        }
-        let at = Path::new(TOOLS).join(tool);
-        if at.exists() {
-            continue;
-        }
-        fs::create_dir_all(TOOLS).with_context(|| format!("make {TOOLS}"))?;
-        let mut out = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&at)
-            .with_context(|| format!("make {}", at.display()))?;
-        io::copy(&mut entry, &mut out).with_context(|| format!("write {}", at.display()))?;
-        out.set_permissions(fs::Permissions::from_mode(0o755)).with_context(|| format!("make {} runnable", at.display()))?;
-        taken.push(tool.to_string());
-    }
-    if !taken.is_empty() {
-        kmsg(&format!("install: the tools the package carries are in {TOOLS}: {}", taken.join(", ")))?;
-    }
-    Ok(taken)
-}
-
-/// Put the answer to `getVolumeKey` where a package's script looks for it.
-///
-/// TWRP hands its scripts a shell function of that name, and packages
-/// written for it ask "press + to go on" through it. This recovery has no
-/// such function, so the phone's own buttons answer: volume up is yes,
-/// volume down is no, and no key at all is no — a package that asks and is
-/// not answered does not go on to write.
-fn shim_volume_key() -> Result<()> {
-    let at = Path::new(VOLUME_KEY);
-    match fs::symlink_metadata(at) {
+/// Give scripts written for other recoveries the shell they start with.
+fn shell_at_sbin() -> Result<()> {
+    let link = Path::new(SBIN_SHELL);
+    match fs::symlink_metadata(link) {
         Ok(_) => return Ok(()),
         Err(e) if e.kind() == ErrorKind::NotFound => {}
-        Err(e) => return Err(e).with_context(|| format!("look at {VOLUME_KEY}")),
+        Err(e) => return Err(e).with_context(|| format!("look at {SBIN_SHELL}")),
     }
-    fs::create_dir_all(TOOLS).with_context(|| format!("make {TOOLS}"))?;
-    let script = r#"#!/system/bin/sh
-# What a package asks through TWRP's getVolumeKey: 0 for volume up, 1 for
-# volume down, 2 when neither came in time.
-exec /system/bin/recovery volume-key 60
-"#;
-    fs::write(at, script).with_context(|| format!("write {VOLUME_KEY}"))?;
-    fs::set_permissions(at, fs::Permissions::from_mode(0o755)).with_context(|| format!("make {VOLUME_KEY} runnable"))?;
-    Ok(())
-}
-
-/// Give scripts written for other recoveries the shell they start with.
-/// Some start with `bash`, which here is the same shell under another name:
-/// a package whose script says `#!/sbin/bash` otherwise does not run at
-/// all, which is what a Durex install did.
-fn shell_at_sbin() -> Result<()> {
-    for name in [SBIN_SHELL, SBIN_BASH] {
-        let link = Path::new(name);
-        match fs::symlink_metadata(link) {
-            Ok(_) => continue,
-            Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => return Err(e).with_context(|| format!("look at {name}")),
-        }
-        let dir = link.parent().expect("the link is in a folder");
-        fs::create_dir_all(dir).with_context(|| format!("make {}", dir.display()))?;
-        symlink(SHELL, link).with_context(|| format!("link {name} to {SHELL}"))?;
-    }
-    Ok(())
+    let dir = link.parent().expect("the link is in a folder");
+    fs::create_dir_all(dir).with_context(|| format!("make {}", dir.display()))?;
+    symlink(SHELL, link).with_context(|| format!("link {SBIN_SHELL} to {SHELL}"))
 }
 
 /// A line one of the install script's outputs gave.
@@ -1102,14 +941,11 @@ impl Drop for Group {
 /// leaves running is ended with it.
 fn run_binary(ctx: &Context) -> Result<(i32, bool)> {
     let mut log = File::create(SCRIPT_LOG).with_context(|| format!("create {SCRIPT_LOG}"))?;
-    let (requests_read, requests_write) = pipe(0)?;
-    let (output_read, output_write) = pipe(0)?;
+    let (requests_read, requests_write) = pipe()?;
+    let (output_read, output_write) = pipe()?;
     let fd = requests_write.as_raw_fd();
     let mut command = std::process::Command::new(BINARY);
-    // The package is named as the phone holds it where it does; a package the
-    // computer sends is only in the mount, and is named there.
-    let package = ctx.package.as_deref().unwrap_or(Path::new(fuse::PACKAGE)).to_string_lossy().into_owned();
-    command.args([API_VERSION, &fd.to_string(), &package]);
+    command.args([API_VERSION, &fd.to_string(), fuse::PACKAGE]);
     // A script started again after a restart cut it off is told so, as
     // Android's own recovery tells it, to pick up where it was.
     if ctx.origin == (Origin::Asked { retry: true }) {
@@ -1223,16 +1059,7 @@ fn run_binary(ctx: &Context) -> Result<(i32, bool)> {
 /// and undo how the slot's partitions were mapped for it; and mount
 /// /metadata again as the recovery keeps it, for a script that took it
 /// away.
-fn clean_up(before: &[(i32, PathBuf)], mapped: &SlotMaps, package_tools: &[String]) -> Result<()> {
-    // Remove tools extracted from this package's bin/ so they don't leak
-    // into the next install. A later package must use its own tools, not
-    // ones left behind by an earlier one.
-    for tool in package_tools {
-        let at = Path::new(TOOLS).join(tool);
-        if let Err(e) = fs::remove_file(&at) {
-            let _ = kmsg(&format!("install: could not take away {}: {e:#}", at.display()));
-        }
-    }
+fn clean_up(before: &[(i32, PathBuf)], mapped: &SlotMaps) -> Result<()> {
     let kept: HashSet<i32> = before.iter().map(|(id, _)| *id).collect();
     for (_, point) in skyward_block::mount::mount_ids()?.into_iter().rev().filter(|(id, _)| !kept.contains(id)) {
         skyward_block::mount::umount_detach(&point)?;
@@ -1251,10 +1078,10 @@ fn failed(e: anyhow::Error) -> Outcome {
     Outcome::Failed(Failure::Error(format!("{e:#}")))
 }
 
-/// A pipe, both ends closed on exec, with `flags` added.
-fn pipe(flags: libc::c_int) -> Result<(OwnedFd, OwnedFd)> {
+/// A pipe, both ends closed on exec.
+fn pipe() -> Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0; 2];
-    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | flags) } != 0 {
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
         return Err(io::Error::last_os_error()).context("make a pipe");
     }
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
