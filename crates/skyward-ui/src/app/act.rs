@@ -337,6 +337,27 @@ impl App {
                 self.edits += 1;
                 self.refresh();
             }
+            Action::FilesOtg => {
+                if self.state.place_open(Place::UsbDrive) {
+                    self.state.otg = Folder::new("");
+                    self.open(Screen::FilesOtg);
+                    return vec![Effect::ReadOtg(String::new())];
+                }
+                self.say(l.pick(["未连接 U 盘", "未連接 USB 隨身碟", "No USB drive"]), now);
+            }
+            Action::OpenOtgEntry(i) => {
+                let entry = self.state.otg.entry(i).clone();
+                match entry.kind {
+                    FileKind::Folder { .. } | FileKind::Link { folder: true, .. } => {
+                        self.state.otg.leave(self.top().1);
+                        return vec![Effect::ReadOtg(self.state.otg.inside(&entry.name))];
+                    }
+                    _ => {
+                        self.state.file = Some(entry);
+                        self.open(Screen::FileInfo);
+                    }
+                }
+            }
             Action::ReadMagisk => return vec![Effect::ReadMagisk],
             Action::ToggleMagisk(i, enabled) => {
                 if let Some(Ok(modules)) = &self.state.magisk.modules

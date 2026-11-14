@@ -113,6 +113,11 @@ impl App {
                 self.state.files_search.clear();
                 self.state.files_found.clear();
             }
+            Screen::FilesOtg => {
+                if let Some(up) = self.state.otg.up() {
+                    return vec![Effect::ReadOtg(up)];
+                }
+            }
             Screen::Choose(place) => {
                 if let Some(up) = self.state.folder(Screen::Choose(place)).up() {
                     return vec![Effect::ReadPlace(place, up)];
@@ -294,6 +299,7 @@ impl App {
             Screen::Systems => vec![Effect::ReadSystems],
             Screen::Restore => vec![self.find_backups()],
             Screen::Files => vec![Effect::ReadDir(self.state.files.path.clone())],
+            Screen::FilesOtg => vec![Effect::ReadOtg(self.state.otg.path.clone())],
             Screen::Magisk => vec![Effect::ReadMagisk],
             Screen::Choose(place) if self.state.place_open(place) => vec![Effect::ReadPlace(place, self.state.folder(s).path.clone())],
             Screen::Search => {

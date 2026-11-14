@@ -127,6 +127,8 @@ pub struct State {
     /// of the drive.
     pub usb_drive: Option<UsbDrive>,
     pub drive: Folder,
+    /// The OTG drive's folder being browsed in the file manager.
+    pub otg: Folder,
     /// The entry the file page describes.
     pub file: Option<FileRow>,
     pub fastboot: Fastboot,
@@ -249,6 +251,7 @@ impl Default for State {
             storage: Folder::new(""),
             usb_drive: None,
             drive: Folder::new(""),
+            otg: Folder::new(""),
             file: None,
             fastboot: Fastboot { running: false, link: UsbLink::Unplugged },
             erase: Erase::default(),
@@ -296,6 +299,7 @@ impl State {
     pub fn folder(&self, screen: Screen) -> &Folder {
         match screen {
             Screen::Files => &self.files,
+            Screen::FilesOtg => &self.otg,
             Screen::Choose(Place::Storage) => &self.storage,
             Screen::Choose(Place::UsbDrive) => &self.drive,
             other => unreachable!("{other:?} lists no folder"),
@@ -305,6 +309,7 @@ impl State {
     pub(super) fn folder_mut(&mut self, screen: Screen) -> &mut Folder {
         match screen {
             Screen::Files => &mut self.files,
+            Screen::FilesOtg => &mut self.otg,
             Screen::Choose(Place::Storage) => &mut self.storage,
             Screen::Choose(Place::UsbDrive) => &mut self.drive,
             other => unreachable!("{other:?} lists no folder"),

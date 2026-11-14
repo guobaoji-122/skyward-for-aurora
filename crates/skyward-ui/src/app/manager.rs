@@ -296,6 +296,11 @@ impl App {
         self.show_folder(Screen::Choose(place), folder, files, listed);
     }
 
+    /// The runtime listed a folder of the OTG drive for the file manager.
+    pub fn set_otg(&mut self, folder: String, files: Result<Vec<FileRow>, String>, listed: i64) {
+        self.show_folder(Screen::FilesOtg, folder, files, listed);
+    }
+
     /// The runtime found the USB drive plugged in, shown or not, or found
     /// none. Another drive, or none, starts its folders over from the top,
     /// and one shown while its page is up is read at once. The backups
@@ -346,7 +351,11 @@ impl App {
             let came_from = std::path::Path::new(left).strip_prefix(&folder).ok().and_then(|rest| rest.components().next());
             let name = came_from.map(|c| c.as_os_str().to_string_lossy().into_owned());
             let k = name.and_then(|name| files.as_ref().ok()?.iter().position(|e| e.name == name));
-            let row = if screen == Screen::Files { Action::OpenEntry } else { Action::ChooseEntry };
+            let row = match screen {
+                Screen::Files => Action::OpenEntry,
+                Screen::FilesOtg => Action::OpenOtgEntry,
+                _ => Action::ChooseEntry,
+            };
             self.top_mut().2 = match k {
                 Some(k) => Focus::On(Spot { stop: Stop::Hit(row(k)), group: Group::Page, rect: Rect::new(0.0, 0.0, 0.0, 0.0) }),
                 None => Focus::Unset,

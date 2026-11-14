@@ -119,6 +119,8 @@ pub enum Screen {
     Files,
     /// Finding an entry in the folder shown, by name or pinyin.
     FilesSearch,
+    /// The files on the OTG drive, all of them.
+    FilesOtg,
     /// Magisk, KernelSU or APatch and the modules they run.
     Magisk,
     /// The web, read as text, pictures and links.
@@ -328,6 +330,10 @@ pub enum Action {
     OpenFound(usize),
     /// Close the file search.
     FilesSearchClose,
+    /// Browse the OTG drive.
+    FilesOtg,
+    /// Open the OTG entry at this place.
+    OpenOtgEntry(usize),
     /// Read the root solution and its modules.
     ReadMagisk,
     /// Enable or disable the module at this place.
@@ -554,6 +560,8 @@ pub enum Effect {
     ToggleMagisk { path: String, enabled: bool },
     /// Mark the module at this path for removal.
     RemoveMagisk(String),
+    /// List the folder at this path on the OTG drive.
+    ReadOtg(String),
     BrowserOpen { url: String, cookie: Option<String> },
     BrowserSubmit { url: String, fields: Vec<(String, String)>, post: bool, cookie: Option<String> },
     BrowserDownload { url: String, name: String, path: String },

@@ -407,8 +407,13 @@ impl App {
         b.view = BrowserView::Loading(url.clone());
         b.form.clear();
         b.field = None;
+        let cookie = cookie_header(&b.cookies, &url);
         self.refresh();
-        vec![Effect::BrowserOpen { url, cookie: None }]
+        vec![Effect::BrowserOpen { url, cookie }]
+    }
+
+    fn browser_cookie(&self, url: &str) -> Option<String> {
+        cookie_header(&self.state.browser.cookies, url)
     }
 
     fn browser_step(&mut self, by: isize, _now: u64) -> Vec<Effect> {
@@ -422,8 +427,9 @@ impl App {
         b.url = url.clone();
         b.address = url.clone();
         b.view = BrowserView::Loading(url.clone());
+        let cookie = cookie_header(&b.cookies, &url);
         self.refresh();
-        vec![Effect::BrowserOpen { url, cookie: None }]
+        vec![Effect::BrowserOpen { url, cookie }]
     }
 
     fn browser_download(&mut self, url: String, name: String, _now: u64) -> Vec<Effect> {
@@ -446,6 +452,16 @@ impl App {
         let b = &mut self.state.browser;
         match opened {
             Ok(skyward_net::web::Opened::Page(page)) => {
+                for cookie in &page.cookies {
+                    b.cookies.retain(|kept| !(kept.name == cookie.name && kept.domain == cookie.domain && kept.path == cookie.path));
+                    b.cookies.push(Cookie {
+                        name: cookie.name.clone(),
+                        value: cookie.value.clone(),
+                        domain: cookie.domain.clone(),
+                        path: cookie.path.clone(),
+                        expires: None,
+                    });
+                }
                 b.url = page.url.clone();
                 b.address = page.url.clone();
                 b.recent.retain(|m| m.url != page.url);
@@ -501,8 +517,9 @@ impl App {
         let post = f.post;
         self.state.browser.field = None;
         self.state.browser.view = BrowserView::Loading(url.clone());
+        let cookie = self.browser_cookie(&url);
         self.refresh();
-        vec![Effect::BrowserSubmit { url, fields, post, cookie: None }]
+        vec![Effect::BrowserSubmit { url, fields, post, cookie }]
     }
 
     fn browser_check_full(&mut self) {
@@ -598,6 +615,14 @@ impl App {
             self.refresh();
         }
     }
+}
+
+fn cookie_header(cookies: &[Cookie], url: &str) -> Option<String> {
+    let pairs: Vec<(String, String, String, String)> = cookies
+        .iter()
+        .map(|c| (c.name.clone(), c.value.clone(), c.domain.clone(), c.path.clone()))
+        .collect();
+    skyward_net::web::cookie_header(&pairs, url)
 }
 
 fn is_browser_action(action: Action) -> bool {

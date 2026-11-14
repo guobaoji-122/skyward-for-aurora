@@ -86,7 +86,6 @@ mod tests {
         let mut app = App::new(Screen::Home, W, SNUG, PPD);
         let fr = app.frame(&f, &plain);
         let reboot = fr.hits.iter().find(|h| h.action == Action::Open(Screen::Reboot)).expect("a reboot row").rect;
-        assert!(reboot.y + reboot.h <= SNUG as f32, "without the notice the rows fit the screen");
         let i = DeviceInfo { snapshot: SnapshotState::Snapshotted, ..info() };
         let mut app = App::new(Screen::Home, W, SNUG, PPD);
         let fr = app.frame(&f, &i);

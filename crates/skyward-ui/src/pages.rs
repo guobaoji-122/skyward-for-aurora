@@ -82,6 +82,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::Advanced => advanced(cx),
         Screen::Files => files(cx),
         Screen::FilesSearch => files_search(cx),
+        Screen::FilesOtg => files_otg(cx),
         Screen::Magisk => crate::magisk::screen(cx),
         Screen::Browser => crate::browser::screen(cx),
         Screen::BrowserAddress => crate::browser::address(cx),
@@ -279,10 +280,12 @@ pub fn home(cx: &Ctx) -> Frame {
     // phone can hold a second system, the two systems.
     let mut rows = Vec::new();
     let mut opens = Vec::new();
-    if let Some(w) = &cx.state.wlan {
-        rows.push(Row::new(l.pick(WLAN)).icon(BLUE, Icon::Wlan).trail(Trail::Value(fmt::wlan_value(l, w))));
+    if cx.state.wlan.is_some() {
+        rows.push(Row::new(l.pick(WLAN)).icon(BLUE, Icon::Wlan).trail(Trail::Value(fmt::wlan_value(l, cx.state.wlan.as_ref().expect("checked")))));
         opens.push(Action::Open(Screen::Wlan));
     }
+    rows.push(Row::new(l.pick(["浏览器", "瀏覽器", "Browser"])).icon(BLUE, Icon::Globe).trail(Trail::Arrow));
+    opens.push(Action::Open(Screen::Browser));
     let starts = systems_value(cx);
     if cx.state.offers(Screen::Systems) {
         let row = Row::new(l.pick(DUAL_BOOT)).icon(PURPLE, Icon::Systems);
@@ -2216,6 +2219,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
     let tools = widgets::list(&mut c, t, f, top, &[
         Row::new(l.pick(FILES)).icon(BLUE, Icon::Folder),
         Row::new("Magisk").icon(GREEN, Icon::Shield),
+        Row::new(l.pick(["OTG 文件", "OTG 檔案", "OTG files"])).icon(ORANGE, Icon::Usb),
         Row::new(l.pick(["浏览器", "瀏覽器", "Browser"])).icon(BLUE, Icon::Globe),
         Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
         Row::new(l.pick(RELABEL)).icon(PURPLE, Icon::Shield),
@@ -2226,6 +2230,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
     let out = hits(&tools.rows, &[
         Action::Open(Screen::Files),
         Action::Open(Screen::Magisk),
+        Action::FilesOtg,
         Action::Open(Screen::Browser),
         Action::Open(Screen::Terminal),
         Action::Open(Screen::Relabel),
@@ -3100,6 +3105,7 @@ pub fn wlan_network(cx: &Ctx) -> Frame {
 /// The file manager, every entry of the folder shown, folders first.
 pub fn files(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let m = &t.m;
     // An entry picked to copy or move goes to the folder shown, from the
     // bar held at the bottom.
     let dock = s.clip.as_ref().map(|clip| {
@@ -3109,21 +3115,28 @@ pub fn files(cx: &Ctx) -> Frame {
         });
         let (canvas, rects) = widgets::dock_bar(t, f, files::page(t), &[l.pick(CANCEL), go]);
         Dock { canvas, hits: hits(&rects, &[Action::Unpick, Action::Paste]) }
-    }).or_else(|| {
-        let (canvas, rects) = widgets::dock_bar(
-            t,
-            f,
-            files::page(t),
-            &[l.pick(["搜索", "搜尋", "Search"])],
-        );
-        Some(Dock { canvas, hits: hits(&rects, &[Action::FilesSearch]) })
-    });
+    }).or_else(|| None);
     let button = Some((widgets::Glyph::Terminal, Action::TerminalHere));
     let root = l.pick(["根目录", "根目錄", "Root"]);
-    Frame { dock, button, ..listing(cx, &s.files, root, None, l.pick(["暂无文件", "沒有檔案", "No files"]), Action::OpenEntry, l.pick(FILES)) }
+    let mut frame = listing(cx, &s.files, root, None, l.pick(["暂无文件", "沒有檔案", "No files"]), Action::OpenEntry, l.pick(FILES));
+    frame.dock = dock;
+    frame.button = button;
+    if s.files.entries.is_ok() {
+        let bar = Rect::new(m.margin, frame.content_top - m.dp(52.0), m.w as f32 - m.margin * 2.0, m.dp(44.0));
+        frame.fold = Some(Fold { bar, hint: l.pick(["搜索当前文件夹", "搜尋目前資料夾", "Search this folder"]), span: m.dp(52.0) });
+        frame.hits.push(Hit { rect: bar, action: Action::FilesSearch });
+    }
+    frame
 }
 
 /// Finding an entry in the folder shown, by its name's letters or pinyin.
+/// The OTG drive's folders and files, all of them.
+pub fn files_otg(cx: &Ctx) -> Frame {
+    let (t, s, l) = (cx.t, cx.state, cx.state.lang);
+    let top = l.pick(["OTG", "OTG", "OTG"]);
+    listing(cx, &s.otg, top, None, l.pick(["U 盘为空", "USB 隨身碟是空的", "The drive is empty"]), Action::OpenOtgEntry, top)
+}
+
 pub fn files_search(cx: &Ctx) -> Frame {
     let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
     let m = &t.m;

@@ -1207,6 +1207,8 @@ struct Pages<'a> {
     servers: Servers,
     /// The browser's worker: a page being read, a file saved, a frame drawn.
     browser: Option<crate::browser::Worker>,
+    /// The full browser's continuous frame stream.
+    browser_stream: Option<crate::browser::Worker>,
     /// The WLAN, on a phone whose driver the recovery brings up.
     wlan: Option<wlan::Worker>,
     scanned_at: Instant,
@@ -1418,6 +1420,7 @@ impl<'a> Pages<'a> {
             switched: false,
             servers: Arc::new(Mutex::new(Vec::new())),
             browser: None,
+            browser_stream: None,
             wlan: None,
             scanned_at: Instant::now(),
             checker: None,
@@ -1785,6 +1788,9 @@ impl<'a> Pages<'a> {
             fds.push(d.fd());
         }
         if let Some(b) = &self.browser {
+            fds.push(b.fd());
+        }
+        if let Some(b) = &self.browser_stream {
             fds.push(b.fd());
         }
         if let Some(p) = &self.part_worker {
@@ -2331,6 +2337,23 @@ impl Pages<'_> {
 
     /// How opening the data partition, or a user's own files in it, ended.
     fn decrypt_told(&mut self, now: u64) -> Result<()> {
+        let mut stream_dead = false;
+        if let Some(worker) = &self.browser_stream {
+            for ev in worker.events() {
+                match ev {
+                    crate::browser::Event::Shot(Ok(frame)) => self.app.browser_plugin_shot(Ok(frame)),
+                    crate::browser::Event::Shot(Err(why)) => {
+                        self.app.browser_plugin_shot(Err(why));
+                        stream_dead = true;
+                    }
+                    crate::browser::Event::Focus(focus) => self.app.browser_plugin_focus(focus),
+                    _ => {}
+                }
+            }
+        }
+        if stream_dead {
+            self.browser_stream = None;
+        }
         let mut browser_done = false;
         if let Some(worker) = &self.browser {
             for ev in worker.events() {
@@ -2624,6 +2647,9 @@ impl Pages<'_> {
                 if let Some(worker) = self.browser.take() {
                     worker.stop();
                 }
+                if let Some(parent) = Path::new(&path).parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
                 let task = crate::browser::Task::Save { url, path: PathBuf::from(path) };
                 match crate::browser::Worker::start(task, self.servers.clone()) {
                     Ok(worker) => self.browser = Some(worker),
@@ -2646,13 +2672,13 @@ impl Pages<'_> {
                 }
             }
             Effect::BrowserPluginStart { dir, url, out } => {
-                if let Some(worker) = self.browser.take() {
+                if let Some(worker) = self.browser_stream.take() {
                     worker.stop();
                 }
-                let task = crate::browser::Task::FullStart { dir: PathBuf::from(dir), url };
+                let task = crate::browser::Task::FullStream { dir: PathBuf::from(dir), url };
                 let _ = out;
                 match crate::browser::Worker::start(task, self.servers.clone()) {
-                    Ok(worker) => self.browser = Some(worker),
+                    Ok(worker) => self.browser_stream = Some(worker),
                     Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
                 }
             }
@@ -2715,6 +2741,9 @@ impl Pages<'_> {
                 if let Some(worker) = &self.browser {
                     worker.stop();
                 }
+                if let Some(worker) = &self.browser_stream {
+                    worker.stop();
+                }
                 let _ = crate::browser::Worker::start(crate::browser::Task::FullStop, self.servers.clone())
                     .map(|w| w.stop());
             }
@@ -2722,6 +2751,11 @@ impl Pages<'_> {
                 let _ = std::fs::remove_dir_all(dir);
             }
             Effect::ReadDir(folder) => list(&mut self.app, folder)?,
+            Effect::ReadOtg(folder) => {
+                let path = in_place(Place::UsbDrive, &folder);
+                let files = read_folder(&path).map_err(|e| format!("{e:#}"));
+                self.app.set_otg(folder, files, unix_now()?);
+            }
             Effect::ReadMagisk => {
                 let (root, modules) = crate::magisk::read();
                 self.app.magisk_read(root, modules.map_err(|e| format!("{e:#}")));
