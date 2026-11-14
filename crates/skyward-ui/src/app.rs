@@ -171,6 +171,12 @@ pub enum Screen {
     BrowserTabs,
     /// The start page's shortcuts, to add or remove.
     BrowserQuick,
+    /// The browser's menu.
+    BrowserMenu,
+    /// Pages read this session.
+    BrowserHistory,
+    /// Pages kept.
+    BrowserBookmarks,
     /// Magisk, KernelSU or APatch and the modules they run.
     Magisk,
 }
@@ -300,6 +306,17 @@ pub struct Browser {
     pub active: usize,
     /// The start page's shortcuts.
     pub quick: Vec<QuickLink>,
+    /// Pages read this session, newest first.
+    pub recent: Vec<BrowserMark>,
+    /// Pages kept on purpose.
+    pub bookmarks: Vec<BrowserMark>,
+}
+
+/// A page kept in the browser's history or bookmarks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrowserMark {
+    pub title: String,
+    pub url: String,
 }
 
 /// One cookie the browser sends back to a server.
@@ -352,6 +369,8 @@ impl Default for Browser {
             tabs: vec![BrowserTab::home()],
             active: 0,
             quick: default_quick(),
+            recent: Vec::new(),
+            bookmarks: Vec::new(),
         }
     }
 }
@@ -1848,6 +1867,20 @@ pub enum Action {
     BrowserQuickAdd,
     /// Put the shortcuts back as they started.
     BrowserQuickReset,
+    /// Open the browser menu.
+    BrowserMenu,
+    /// Keep or unkeep the page shown.
+    BrowserBookmark,
+    /// Show pages read this session.
+    BrowserHistoryList,
+    /// Show kept pages.
+    BrowserBookmarksList,
+    /// Open the history or bookmark at this place.
+    BrowserMarkOpen(usize),
+    /// Remove the history or bookmark at this place.
+    BrowserMarkRemove(usize),
+    /// Stop reading the page.
+    BrowserStop,
     /// Type into the page's form field `field` of form `form`.
     BrowserFormField(usize, usize),
     /// Send the page's form `i`.
@@ -6099,9 +6132,11 @@ impl App {
             match opened {
                 Ok(Opened::Page(page)) => {
                     let url = page.url.clone();
+                    let title = page.title.clone();
                     if let Some(slot) = b.history.get_mut(b.at) {
                         *slot = url.clone();
                     }
+                    remember(&mut b.recent, &title, &url);
                     b.url = url.clone();
                     b.address = url;
                     b.form = page
@@ -6127,6 +6162,7 @@ impl App {
                     if let Some(slot) = b.history.get_mut(b.at) {
                         *slot = url.clone();
                     }
+                    remember(&mut b.recent, &file.name, &url);
                     b.url = url.clone();
                     b.address = url;
                     b.view = BrowserView::File(file);
@@ -7065,6 +7101,59 @@ impl App {
                 self.refresh();
             }
             Action::BrowserQuick => self.open(Screen::BrowserQuick),
+            Action::BrowserMenu => self.open(Screen::BrowserMenu),
+            Action::BrowserHistoryList => self.open(Screen::BrowserHistory),
+            Action::BrowserBookmarksList => self.open(Screen::BrowserBookmarks),
+            Action::BrowserBookmark => {
+                let page = self.state.browser.page().map(|p| BrowserMark { title: p.title.clone(), url: p.url.clone() });
+                if let Some(mark) = page {
+                    if let Some(at) = self.state.browser.bookmarks.iter().position(|b| b.url == mark.url) {
+                        self.state.browser.bookmarks.remove(at);
+                        self.say(l.pick(["已取消书签", "已取消書籤", "Bookmark removed"]), now);
+                    } else {
+                        self.state.browser.bookmarks.push(mark);
+                        self.say(l.pick(["已加入书签", "已加入書籤", "Bookmarked"]), now);
+                    }
+                    self.refresh();
+                }
+            }
+            Action::BrowserMarkOpen(i) => {
+                let mark = match self.screen() {
+                    Screen::BrowserHistory => self.state.browser.recent.get(i).cloned(),
+                    Screen::BrowserBookmarks => self.state.browser.bookmarks.get(i).cloned(),
+                    _ => None,
+                };
+                if let Some(mark) = mark {
+                    if self.screen() != Screen::Browser {
+                        self.open(Screen::Browser);
+                    }
+                    return self.browser_go(&mark.url, now);
+                }
+            }
+            Action::BrowserMarkRemove(i) => {
+                match self.screen() {
+                    Screen::BrowserHistory => {
+                        if i < self.state.browser.recent.len() {
+                            self.state.browser.recent.remove(i);
+                        }
+                    }
+                    Screen::BrowserBookmarks => {
+                        if i < self.state.browser.bookmarks.len() {
+                            self.state.browser.bookmarks.remove(i);
+                        }
+                    }
+                    _ => {}
+                }
+                self.refresh();
+            }
+            Action::BrowserStop => {
+                let url = self.state.browser.url.clone();
+                if !url.is_empty() {
+                    self.state.browser.view = BrowserView::Failed { url, why: l.pick(["已停止", "已停止", "Stopped"]).into() };
+                }
+                self.refresh();
+                return vec![Effect::StopBrowser];
+            }
             Action::BrowserQuickOpen(i) => {
                 if let Some(q) = self.state.browser.quick.get(i).cloned() {
                     if self.screen() == Screen::BrowserAddress {
@@ -9336,6 +9425,15 @@ fn escape_text(text: &str) -> String {
         }
     }
     out
+}
+
+fn remember(list: &mut Vec<BrowserMark>, title: &str, url: &str) {
+    if url.is_empty() {
+        return;
+    }
+    list.retain(|mark| mark.url != url);
+    list.insert(0, BrowserMark { title: title.to_string(), url: url.to_string() });
+    list.truncate(60);
 }
 
 /// The address the plugin should load. The basic reader asks Bing for RSS;

@@ -122,6 +122,9 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::BrowserFull => crate::browser::full(cx),
         Screen::BrowserTabs => crate::browser::tabs(cx),
         Screen::BrowserQuick => crate::browser::quick(cx),
+        Screen::BrowserMenu => crate::browser::menu(cx),
+        Screen::BrowserHistory => crate::browser::marks(cx, true),
+        Screen::BrowserBookmarks => crate::browser::marks(cx, false),
     }
 }
 
