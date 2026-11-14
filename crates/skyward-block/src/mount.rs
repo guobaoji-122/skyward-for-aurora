@@ -1,3 +1,8 @@
+use std::ffi::CString;
+use std::io;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
+
 /// Filesystems Android puts on logical and metadata partitions, in the order
 /// a device's fstab lists alternatives for one mount point.
 pub const FILESYSTEMS: [&str; 3] = ["erofs", "ext4", "f2fs"];
@@ -26,7 +31,6 @@ const FLAGS: [(&str, u64); 18] = [
     ("defaults", 0),
 ];
 
-
 /// Split the mount options of a phone's table into the kernel's flags and
 /// the options the filesystem reads, joined the way the kernel takes them.
 pub fn split_options(options: &[String]) -> (u64, String) {
@@ -49,34 +53,37 @@ pub struct Visible {
     pub filesystem: String,
 }
 
-use std::path::Path;
+/// The room in a filesystem, in bytes: all of it, what no file takes, and
+/// the part of that left for files other than the system's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Space {
+    pub total: u64,
+    pub free: u64,
+    pub available: u64,
+}
 
-/// Whether the mount table's line for `path` says read-only, if it has one:
-/// `None` where nothing is mounted there. Later lines are mounts stacked
-/// over earlier ones, so the last one for a path is what shows at it. The
-/// phone's callers ask it before they write, and the tests below read it
-/// too; the computer's library build alone has no caller, so there the
-/// check is simply let be.
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
-fn read_only_in(table: &str, path: &Path) -> Option<bool> {
-    let mut found = None;
-    for line in table.lines() {
-        let mut fields = line.split_whitespace();
-        let (Some(_device), Some(at), Some(_kind), Some(options)) =
-            (fields.next(), fields.next(), fields.next(), fields.next())
-        else {
-            continue;
-        };
-        if Path::new(at) == path {
-            found = Some(options.split(',').any(|o| o == "ro"));
-        }
+/// The room in the filesystem that holds `path`.
+pub fn space(path: &Path) -> io::Result<Space> {
+    let s = statvfs(path)?;
+    // The counts are 32 bits on some hosts and 64 on the phone.
+    #[allow(clippy::useless_conversion)]
+    let (blocks, free, available, size) = (u64::from(s.f_blocks), u64::from(s.f_bfree), u64::from(s.f_bavail), u64::from(s.f_frsize));
+    Ok(Space { total: blocks * size, free: free * size, available: available * size })
+}
+
+/// What the kernel says of the filesystem that holds `path`.
+fn statvfs(path: &Path) -> io::Result<libc::statvfs> {
+    let c = CString::new(path.as_os_str().as_bytes()).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
+        return Err(io::Error::last_os_error());
     }
-    found
+    Ok(s)
 }
 
 #[cfg(target_os = "android")]
 mod sys {
-    use super::{read_only_in, Visible, FILESYSTEMS};
+    use super::{Visible, FILESYSTEMS};
     use anyhow::{bail, Context, Result};
     use procfs::process::{all_processes, MMapPath, MountInfo, MountOptFields, Process};
     use procfs::{ProcError, ProcResult};
@@ -190,11 +197,7 @@ mod sys {
     /// Mount what shows at `target` again with the flags it has, writable
     /// or read-only. Going read-only writes all it holds out first.
     pub fn remount_writable(target: &Path, writable: bool) -> Result<()> {
-        let c = cstr(target)?;
-        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-            return Err(os_error()).with_context(|| format!("look at the mount on {}", target.display()));
-        }
+        let st = super::statvfs(target).with_context(|| format!("look at the mount on {}", target.display()))?;
         let kept = [
             (libc::ST_NOSUID, libc::MS_NOSUID),
             (libc::ST_NODEV, libc::MS_NODEV),
@@ -214,16 +217,6 @@ mod sys {
         }
         let what = if writable { "writable" } else { "read-only" };
         remount(target, flags, what)
-    }
-
-    /// Whether what is mounted at `path` may be written to, as the kernel
-    /// records it in the mount table: `None` where nothing is mounted there.
-    /// A partition that stays mounted read-only is one whose blocks can be
-    /// written beneath it, because nothing is ever written back through it;
-    /// a writable one would put its own bytes back over the new ones.
-    pub fn read_only(path: &Path) -> Result<Option<bool>> {
-        let table = std::fs::read_to_string("/proc/mounts").context("read /proc/mounts")?;
-        Ok(read_only_in(&table, path))
     }
 
     /// What is visibly mounted at `path`, the last of any mounts stacked there.
@@ -332,39 +325,6 @@ mod sys {
     /// paths.
     pub fn umount_detach_over(target: &Path) -> Result<()> {
         under_parked(target, umount_detach)
-    }
-
-    /// How often an unmount is tried, and how long between the tries: what
-    /// the phone's own recovery allows for, and for the same reason.
-    const UMOUNT_TRIES: usize = 5;
-    const UMOUNT_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
-
-    /// Unmount `target`, giving whatever is closing a file on it a moment to
-    /// finish, and name the programs still holding it when it will not come
-    /// off: "Device or resource busy" alone leaves nothing to act on.
-    ///
-    /// Five tries a hundred milliseconds apart, as the phone's own recovery
-    /// allows for: a program that has just been told to end still holds its
-    /// files while it goes.
-    pub fn umount_when_free(target: &Path) -> Result<()> {
-        let device = visible(target)?.map(|v| v.device);
-        let mut last = None;
-        for attempt in 0..UMOUNT_TRIES {
-            if attempt > 0 {
-                std::thread::sleep(UMOUNT_WAIT);
-            }
-            match umount_over(target) {
-                Ok(()) => return Ok(()),
-                Err(e) => last = Some(e),
-            }
-        }
-        let why = last.expect("a try that failed kept its error");
-        let who = device.map(|d| holding(d).unwrap_or_default()).unwrap_or_default();
-        if who.is_empty() {
-            return Err(why);
-        }
-        let named: Vec<String> = who.into_iter().map(|(pid, name)| format!("{name} ({pid})")).collect();
-        Err(why.context(format!("held by {}", named.join(", "))))
     }
 
     fn under_parked(target: &Path, unmount: fn(&Path) -> Result<()>) -> Result<()> {
@@ -505,15 +465,7 @@ mod sys {
         bail!("this host does not unmount {}", target.display())
     }
 
-    pub fn umount_when_free(target: &Path) -> Result<()> {
-        bail!("this host does not unmount {}", target.display())
-    }
-
     pub fn is_mount_point(path: &Path) -> Result<bool> {
-        bail!("this host has no mount table to look up {}", path.display())
-    }
-
-    pub fn read_only(path: &Path) -> Result<Option<bool>> {
         bail!("this host has no mount table to look up {}", path.display())
     }
 
@@ -544,7 +496,7 @@ mod sys {
 
 pub use sys::{
     bind, holders, holding, is_mount_point, mount, mount_ids, mount_ro, mount_ro_over, points_of, remount_writable, umount,
-    read_only, umount_detach, umount_detach_over, umount_over, umount_when_free, visible,
+    umount_detach, umount_detach_over, umount_over, visible,
 };
 
 #[cfg(test)]
@@ -565,22 +517,11 @@ mod tests {
     }
 
     #[test]
-    fn a_mount_table_says_which_mount_points_are_read_only() {
-        let table = "\
-/dev/block/dm-2 /mnt/system erofs ro,seclabel,relatime 0 0\n\
-/dev/block/dm-3 /mnt/vendor erofs rw,relatime 0 0\n\
-tmpfs /tmp tmpfs rw,seclabel 0 0\n";
-        assert_eq!(read_only_in(table, Path::new("/mnt/system")), Some(true));
-        assert_eq!(read_only_in(table, Path::new("/mnt/vendor")), Some(false));
-        assert_eq!(read_only_in(table, Path::new("/tmp")), Some(false));
-        assert_eq!(read_only_in(table, Path::new("/mnt/odm")), None, "nothing mounted there");
-    }
-
-    #[test]
-    fn the_last_mount_stacked_at_a_path_is_the_one_that_shows() {
-        let table = "\
-/dev/block/dm-3 /mnt/vendor erofs ro,relatime 0 0\n\
-/dev/block/dm-9 /mnt/vendor erofs rw,relatime 0 0\n";
-        assert_eq!(read_only_in(table, Path::new("/mnt/vendor")), Some(false));
+    fn a_filesystems_room_is_all_of_it_what_is_free_and_what_is_left_for_others() {
+        let room = space(&std::env::temp_dir()).unwrap();
+        assert!(room.total > 0);
+        assert!(room.total >= room.free && room.free >= room.available, "{room:?}");
+        assert_eq!(space(Path::new("/no/such/folder")).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(space(Path::new("/tmp/a\0b")).unwrap_err().kind(), io::ErrorKind::InvalidInput);
     }
 }

@@ -1,18 +1,19 @@
 use anyhow::{bail, ensure, Context, Result};
 use procfs::process::{FDTarget, MMapPath, Process};
 use skyward_config::Service;
+use skyward_programs::script::{Socket, SocketKind};
+use skyward_programs::secure::Started;
 use skyward_sys::ueventd;
 use skyward_vab::Mounted;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io;
-use std::io::Read;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,90 +21,9 @@ use std::time::{Duration, Instant};
 /// before it is started again.
 const RESTART_DELAY: Duration = Duration::from_secs(1);
 
-/// How long a program has to stay up before its ending is not taken for a
-/// crash: a program that ends at once is one that cannot run here.
-const ALIVE: Duration = Duration::from_secs(10);
-
-/// How long a program that keeps crashing is left alone between the
-/// tries, at the most: the wait grows as the crashes do, so a program
-/// that cannot run costs the phone less and less of its time, and one
-/// that comes up after a while is still found.
-const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(60);
-
-/// How many crashes in a row a program may have before it is left alone
-/// for good: some cannot ever run here, and starting them again and
-/// again costs a fork and a page fault each time, forever.
-const CRASHES_ALLOWED: usize = 5;
-
 /// How long a program gets to become what it says it will be.
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 const READY_POLL: Duration = Duration::from_millis(100);
-
-/// The most lines of a program that runs once are kept: enough for a step
-/// to name what was missing, short of a step that fails in a loop.
-const SAID_LINES: usize = 40;
-
-/// The same for a program that stays up, kept per start: a daemon that
-/// ends at once says why on its way out, and next to nothing while it
-/// runs, so a handful of its first lines is what tells the two apart.
-const DAEMON_LINES: usize = 12;
-
-/// What the services last said on their way out, kept where the page can
-/// reach it: a phone whose key service will not stay up says so in the
-/// recovery's own log, which its owner can read nowhere. The page is the
-/// one place they can.
-static SAID: std::sync::OnceLock<std::sync::Mutex<Vec<(String, String)>>> = std::sync::OnceLock::new();
-
-/// How many of a service's last lines are kept for the page.
-const SAID_KEPT: usize = 4;
-
-/// A line with its numbers blanked, so that a service started again and
-/// again is not remembered once per pid. A phone whose key service dies on
-/// every start leaves three hundred lines that differ only in the number,
-/// and keeping them would push out the one line saying why it will not
-/// stay up.
-fn shape(line: &str) -> String {
-    line.chars().map(|c| if c.is_ascii_digit() { '#' } else { c }).collect()
-}
-
-/// Keep one line of a service's own words, a few of the latest: a step that
-/// runs once says why at its end, a daemon says it first, and four of the
-/// latest hold both.
-fn remember(line: String) {
-    let kept = SAID.get_or_init(Default::default);
-    let mut kept = kept.lock().expect("no thread panics while the words are kept");
-    let key = shape(&line);
-    kept.retain(|(k, _)| *k != key);
-    kept.push((key, line));
-    while kept.len() > SAID_KEPT {
-        kept.remove(0);
-    }
-}
-
-/// What the services last said that explains why one of them is not
-/// running, when any of them said anything.
-pub fn why() -> Option<String> {
-    let kept = SAID.get()?.lock().ok()?;
-    match kept.is_empty() {
-        true => None,
-        false => Some(kept.iter().map(|(_, line)| line.as_str()).collect::<Vec<_>>().join("; ")),
-    }
-}
-
-/// The installed system's own linker, where it keeps one. A program built
-/// for the phone may need a library this recovery does not carry, and one
-/// that cannot be had is the end of the road: the linker refuses the
-/// program outright. The phone's own linker knows the phone's own
-/// libraries — its libc++, its base, its log — and they were built
-/// together, where this recovery's were not.
-const PHONE_LINKERS: [&str; 2] = ["/mnt/system/system/bin/linker64", "/mnt/system/bin/linker64"];
-
-/// Where the phone's own libraries are, for a program started through the
-/// phone's own linker.
-const PHONE_LIBRARIES: &str = "/mnt/system/system/lib64:/mnt/system/system/lib64/bootstrap:/mnt/system/lib64:/mnt/system/system_ext/lib64:/mnt/system/product/lib64:/mnt/system/odm/lib64:/vendor/lib64:/vendor/lib64/hw:/odm/lib64";
-
-/// What the linker says when it refuses a program for want of a library.
-const REFUSED: &str = "CANNOT LINK EXECUTABLE";
 
 /// Where the kernel says the highest capability it knows.
 const CAP_LAST_CAP: &str = "/proc/sys/kernel/cap_last_cap";
@@ -111,100 +31,201 @@ const CAP_LAST_CAP: &str = "/proc/sys/kernel/cap_last_cap";
 /// The version of the kernel's capability sets that holds 64 of them.
 const CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 
+/// Where init makes the sockets it hands its programs, and what it names
+/// the variable that tells a program which of its open files one of them
+/// is: this and then the socket's name.
+const SOCKETS: &str = "/dev/socket";
+const SOCKET_VARIABLE: &str = "ANDROID_SOCKET_";
+
+/// How many callers init has a socket it listens on hold while they wait:
+/// as many as the kernel lets it.
+const WAITING_CALLERS: libc::c_int = 1 << 30;
+
+/// The variable a program's loader reads the folders of its libraries
+/// from.
+const LIBRARY_PATH: &str = "LD_LIBRARY_PATH";
+
 /// Keep each program running, one thread per program: start it, and start
 /// it again whenever it exits. They are started in the order they are
-/// written, and one that says what it will be ready with holds up those
+/// given, and one that says what it will be ready with holds up those
 /// after it until it is. A program still running from an earlier instance
-/// of the recovery service is waited on instead of started twice. A
-/// program that runs once is run to its end where it stands in that order.
-/// Each runs as the user, in the groups and with the capabilities the
-/// phone's own init gives it.
+/// of the recovery service is waited on instead of started twice, unless
+/// it is one to start anew, which is ended first. A program that runs once
+/// is run to its end where it stands in that order. Each runs as the user,
+/// in the groups and with the capabilities the phone's own init gives it,
+/// with the sockets and the environment init hands it.
 ///
 /// `libraries` is a directory of shared libraries every one of them may
 /// need, searched after whatever it names itself.
-pub fn start(services: &[Service], libraries: Option<&Path>) -> Result<()> {
-    let known = ueventd::accounts(&ueventd::PASSWD_FILES.iter().chain(&ueventd::GROUP_FILES).copied().collect::<Vec<_>>());
-    for s in services {
-        let mut s = s.clone();
-        if !Path::new(&s.path).is_file() {
-            // The same service carries another name on other builds of the
-            // hardware; the installed ROM renamed its vendor binary. Take
-            // the first alternate that is there, so the service keeps
-            // working without a separate device file per build.
-            if let Some(alts) = &s.alternates {
-                if let Some(found) = alts.iter().find(|a| Path::new(a).is_file()) {
-                    s.path = found.clone();
-                }
-            }
-        }
-        if !Path::new(&s.path).is_file() {
-            if s.optional {
-                skyward_sys::kmsg(&format!("{} is missing; this phone does without it", s.path))?;
-                continue;
-            }
-            bail!("{} is missing; is its partition mounted?", s.path);
-        }
-        if let Some(dir) = libraries {
-            s.libraries.push(dir.to_string_lossy().into_owned());
-        }
-        let who = match Credentials::of(&s, &known) {
-            Ok(who) => who,
-            Err(e) if s.optional => {
-                skyward_sys::kmsg(&format!("{e:#}; this phone does without it"))?;
-                continue;
-            }
-            Err(e) => return Err(e),
-        };
+pub fn start(programs: &[Started], libraries: Option<&Path>) -> Result<()> {
+    let known = accounts();
+    for program in programs {
+        let (s, who, given) = readied(program, libraries, &known)?;
         if s.oneshot {
-            // What it said goes to the log. A step that fails names its
-            // reason there and nowhere else, and one that finds nothing to
-            // do says so; without this the log keeps a bare exit status and
-            // the reason is lost with the pipe it went down.
-            let done = command(&s, &who)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-                .with_context(|| format!("run {}", s.path))?;
-            let said = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
-            // The last lines are kept, not the first: a step that fails says
-            // why at its end, and a step that talks its way there would
-            // otherwise push the reason out of the log.
-            let lines: Vec<&str> = said.lines().filter(|l| !l.trim().is_empty()).collect();
-            // Only a step that failed is remembered for the page: a step
-            // that succeeded may still have said something, and that would
-            // not explain a later failure.
-            let failed = !done.status.success();
-            if failed && lines.is_empty() {
-                // A step that failed without a word is still named for the
-                // page: which step it was is half the answer.
-                remember(format!("{} {} ended: {}", s.path, s.args.join(" "), done.status));
-            }
-            for line in &lines[lines.len().saturating_sub(SAID_LINES)..] {
-                let said = format!("{}: {line}", s.path);
-                if failed {
-                    remember(said.clone());
-                }
-                skyward_sys::kmsg(&said)?;
-            }
-            ensure!(done.status.success(), "{} {} ended: {}", s.path, s.args.join(" "), done.status);
+            let status = to_its_end(&s, &who, &given)?;
+            ensure!(status.success(), "{} {} ended: {status}", s.path, s.args.join(" "));
             skyward_sys::kmsg(&format!("ran {} {}", s.path, s.args.join(" ")))?;
             continue;
         }
-        let optional = s.optional;
+        if program.anew {
+            end_left(&s)?;
+        }
+        // A property the program an earlier run of the recovery service
+        // started has set says nothing of the one started now, which the
+        // programs after it wait for.
+        if let Some(property) = s.ready_property.as_ref().filter(|_| running(&s.path).is_none())
+            && skyward_sys::prop(property).is_some_and(|value| !value.is_empty())
+        {
+            skyward_sys::set_prop(property, "")?;
+        }
         let waiting = s.clone();
         let name = Path::new(&s.path).file_name().map_or_else(|| s.path.clone(), |n| n.to_string_lossy().into_owned());
-        thread::Builder::new().name(name).spawn(move || supervise(&s, &who)).context("start a supervising thread")?;
-        if let Err(e) = ready(&waiting) {
-            // One the phone can do without holds up nothing: it may come up
-            // late, or not at all, and what needs it says so when it is
-            // asked.
-            if !optional {
-                return Err(e);
-            }
-            skyward_sys::kmsg(&format!("{e:#}"))?;
-        }
+        thread::Builder::new().name(name).spawn(move || supervise(&s, &who, &given)).context("start a supervising thread")?;
+        ready(&waiting)?;
     }
     Ok(())
+}
+
+/// Run `program` once to its end and give how it ended, as init runs a
+/// program one of its scripts has it run before it goes on: however the
+/// program ends, init goes on, and so may whoever asks here. It runs as
+/// [`start`] runs one, with `libraries` as there.
+pub fn once(program: &Started, libraries: Option<&Path>) -> Result<ExitStatus> {
+    let (s, who, given) = readied(program, libraries, &accounts())?;
+    to_its_end(&s, &who, &given)
+}
+
+/// The accounts the phone knows, each by its name.
+fn accounts() -> HashMap<String, u32> {
+    ueventd::accounts(&ueventd::PASSWD_FILES.iter().chain(&ueventd::GROUP_FILES).copied().collect::<Vec<_>>())
+}
+
+/// What `program` is started with, worked out before it is: the program
+/// itself, which has to be there, with `libraries` after its own, who it
+/// runs as and what init hands it.
+fn readied(program: &Started, libraries: Option<&Path>, known: &HashMap<String, u32>) -> Result<(Service, Credentials, Given)> {
+    let mut s = program.service.clone();
+    if !Path::new(&s.path).is_file() {
+        bail!("{} is missing; is its partition mounted?", s.path);
+    }
+    if let Some(dir) = libraries {
+        s.libraries.push(dir.to_string_lossy().into_owned());
+    }
+    let who = Credentials::of(&s, known)?;
+    let given = Given::of(program, known)?;
+    Ok((s, who, given))
+}
+
+/// Start the program, wait until it ends and give how it ended.
+fn to_its_end(s: &Service, who: &Credentials, given: &Given) -> Result<ExitStatus> {
+    let handed = given.make()?;
+    command(s, who, given, &handed).status().with_context(|| format!("run {}", s.path))
+}
+
+/// What init hands a program as it starts it besides what its line gives
+/// it, worked out before the program is started: the sockets it makes for
+/// it, each with the user and the group it is given to, and what it sets
+/// in its environment.
+#[derive(Debug, Clone)]
+struct Given {
+    sockets: Vec<(Socket, libc::uid_t, libc::gid_t)>,
+    environment: Vec<(String, String)>,
+}
+
+impl Given {
+    /// What `program` is handed, by the names the phone gives its
+    /// accounts: a socket that names no user or no group is root's.
+    fn of(program: &Started, known: &HashMap<String, u32>) -> Result<Self> {
+        let path = &program.service.path;
+        let id = |name: &Option<String>| match name {
+            Some(name) => ueventd::account(known, name).with_context(|| format!("{path}: the phone has no account named {name}")),
+            None => Ok(0),
+        };
+        let sockets = program.sockets.iter().map(|s| Ok((s.clone(), id(&s.user)?, id(&s.group)?))).collect::<Result<Vec<_>>>()?;
+        Ok(Self { sockets, environment: program.environment.clone() })
+    }
+
+    /// Make each socket, as init makes them afresh every time it starts
+    /// the program, and give each with the variable that names it to the
+    /// program: the socket's name, with whatever in it is neither a letter
+    /// nor a digit turned into an underscore.
+    fn make(&self) -> Result<Vec<(String, OwnedFd)>> {
+        let mut handed = Vec::new();
+        for (socket, uid, gid) in &self.sockets {
+            let name: String = socket.name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+            handed.push((format!("{SOCKET_VARIABLE}{name}"), make_socket(socket, *uid, *gid)?));
+        }
+        Ok(handed)
+    }
+}
+
+/// Make the socket under [`SOCKETS`] as init makes it: in the place of one
+/// of its name left there, bound to its name, given to its user and its
+/// group with its mode, and listening only where its line says so, a
+/// program otherwise listening on it itself.
+fn make_socket(socket: &Socket, uid: libc::uid_t, gid: libc::gid_t) -> Result<OwnedFd> {
+    let path = Path::new(SOCKETS).join(&socket.name);
+    let kind = match socket.kind {
+        SocketKind::Stream => libc::SOCK_STREAM,
+        SocketKind::Dgram => libc::SOCK_DGRAM,
+        SocketKind::Seqpacket => libc::SOCK_SEQPACKET,
+    };
+    let done = |r: libc::c_int, what: &str| match r {
+        0 => Ok(()),
+        _ => Err(io::Error::last_os_error()).with_context(|| format!("{what} the socket {}", path.display())),
+    };
+    let fd = unsafe { libc::socket(libc::AF_UNIX, kind | libc::SOCK_CLOEXEC, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error()).with_context(|| format!("make the socket {}", path.display()));
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("take away the {} left there", path.display())),
+    }
+    if socket.passcred {
+        let on: libc::c_int = 1;
+        let size = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        done(unsafe { libc::setsockopt(fd.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PASSCRED, (&on as *const libc::c_int).cast(), size) }, "have each peer's credentials come over")?;
+    }
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    let name = path.as_os_str().as_bytes();
+    // The name ends in a zero byte, which the address is already full of.
+    ensure!(name.len() < address.sun_path.len(), "{} is too long a name for a socket", path.display());
+    for (to, from) in address.sun_path.iter_mut().zip(name) {
+        *to = *from as libc::c_char;
+    }
+    let size = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+    done(unsafe { libc::bind(fd.as_raw_fd(), (&address as *const libc::sockaddr_un).cast(), size) }, "bind")?;
+    std::os::unix::fs::lchown(&path, Some(uid), Some(gid)).with_context(|| format!("give the socket {} to {uid}:{gid}", path.display()))?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(socket.mode)).with_context(|| format!("give the socket {} the mode {:o}", path.display(), socket.mode))?;
+    if socket.listen {
+        done(unsafe { libc::listen(fd.as_raw_fd(), WAITING_CALLERS) }, "listen on")?;
+    }
+    Ok(fd)
+}
+
+/// End the program an earlier run of the recovery service left running,
+/// and wait until the service it was ready with is gone from the service
+/// directory, so that waiting for the one started next waits for that one.
+fn end_left(s: &Service) -> Result<()> {
+    let Some(pid) = running(&s.path) else { return Ok(()) };
+    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } != 0 {
+        let e = io::Error::last_os_error();
+        // It ended between being found and being told to.
+        if e.raw_os_error() != Some(libc::ESRCH) {
+            return Err(e).with_context(|| format!("end {}, pid {pid}, left by an earlier recovery service", s.path));
+        }
+    }
+    wait_for(pid)?;
+    let until = Instant::now() + READY_TIMEOUT;
+    while s.ready_service.as_deref().is_some_and(registered) {
+        ensure!(Instant::now() < until, "{}, pid {pid}, is ended and still registered {} seconds on", s.path, READY_TIMEOUT.as_secs());
+        thread::sleep(READY_POLL);
+    }
+    skyward_sys::kmsg(&format!("{}: pid {pid}, left by an earlier recovery service, ended to be started anew", s.path))
 }
 
 /// Who a program runs as and what of root's it keeps, as the phone's own
@@ -309,22 +330,22 @@ fn ready(s: &Service) -> Result<()> {
     };
     let until = Instant::now() + READY_TIMEOUT;
     loop {
-        if let Some(name) = &s.ready_property {
-            if skyward_sys::prop(name).is_some_and(|v| !v.is_empty()) {
-                return Ok(());
-            }
+        if let Some(name) = &s.ready_property
+            && skyward_sys::prop(name).is_some_and(|v| !v.is_empty())
+        {
+            return Ok(());
         }
         // Either directory may itself be starting again, and until it
         // answers nothing can be looked up in it.
-        if let Some(name) = &s.ready_service {
-            if registered(name) {
-                return Ok(());
-            }
+        if let Some(name) = &s.ready_service
+            && registered(name)
+        {
+            return Ok(());
         }
-        if let Some(name) = &s.ready_hardware_service {
-            if registered_hardware(name) {
-                return Ok(());
-            }
+        if let Some(name) = &s.ready_hardware_service
+            && registered_hardware(name)
+        {
+            return Ok(());
         }
         if Instant::now() >= until {
             bail!("{} {waited_on} in {} seconds", s.path, READY_TIMEOUT.as_secs());
@@ -333,197 +354,75 @@ fn ready(s: &Service) -> Result<()> {
     }
 }
 
-fn supervise(s: &Service, who: &Credentials) {
-    // A program that crashes at once is one that cannot run here. Left to
-    // itself it is started again a second later, and again a second after
-    // that, for as long as the recovery is up: a phone that boots a
-    // service which ends at once spends a fork and a page fault on it
-    // every second, and the recovery's own work -- a package being
-    // downloaded and checked, a disk being written -- goes slower for it.
-    //
-    // So the crashes are counted. The wait between the tries grows as
-    // they do, and after enough of them the program is left alone: what
-    // it was for is not said to be gone, but nothing is spent on it
-    // either. A program that stays up is started afresh, as before.
-    let mut crashes = 0usize;
+fn supervise(s: &Service, who: &Credentials, given: &Given) -> ! {
     loop {
         let started = Instant::now();
         let ended = match running(&s.path) {
             Some(pid) => wait_for(pid).map(|()| format!("pid {pid}, left by an earlier recovery service, exited")),
-            None => run(s, who),
+            None => run(s, who, given),
         };
         let line = match ended {
             Ok(how) => format!("{}: {how}", s.path),
             Err(e) => format!("{}: {e:#}", s.path),
         };
-        // The page is told which service stopped, even when it stopped
-        // without a word.
-        remember(line.clone());
         let _ = skyward_sys::kmsg(&line);
-        // A program that ran long enough was not a crash: it did what it
-        // was for, and its ending is not held against it.
-        if started.elapsed() >= ALIVE {
-            crashes = 0;
+        if started.elapsed() < RESTART_DELAY {
             thread::sleep(RESTART_DELAY);
-            continue;
-        }
-        crashes += 1;
-        if crashes > CRASHES_ALLOWED {
-            let line = format!("{}: it ended {crashes} times at once, and is left alone", s.path);
-            remember(line.clone());
-            let _ = skyward_sys::kmsg(&line);
-            // The thread ends with the program: nothing waits on it, and
-            // the page is told what happened.
-            return;
-        }
-        // The wait grows with the crashes, up to a minute: a program that
-        // is coming up late is found, and one that cannot run costs the
-        // phone less and less of its time.
-        let until = Instant::now() + wait_after(crashes);
-        while Instant::now() < until {
-            thread::sleep(Duration::from_millis(100));
         }
     }
 }
 
-/// How long to wait before starting a program again, after it has ended
-/// at once `crashes` times in a row.
-///
-/// The wait doubles each time, up to a minute: a program that is coming
-/// up late is found within it, and one that cannot run here costs the
-/// phone less and less of its time.
-fn wait_after(crashes: usize) -> Duration {
-    // The doubling is stopped where it would overflow, which is well
-    // before the cap below takes hold.
-    let factor = 1u32.checked_shl(crashes as u32).unwrap_or(u32::MAX);
-    RESTART_DELAY.saturating_mul(factor).min(RESTART_BACKOFF_MAX)
-}
-
-/// Start the program and wait for it to end, keeping the first lines it
-/// says on the way.
-///
-/// A daemon that ends at once — a library it cannot load, a device that is
-/// not there — says so on standard error, and that one line is the whole
-/// explanation. Its streams were thrown away, so a phone whose service
-/// would not stay up left only "ended: exit status 1" behind.
-fn run(s: &Service, who: &Credentials) -> Result<String> {
-    let refused = Arc::new(AtomicBool::new(false));
-    let (pid, status) = spawn(s, who, None, refused.clone())?;
-    if refused.load(Ordering::Relaxed) && is_program(&s.path) {
-        // The linker would not have the program. The phone's own linker
-        // knows the phone's own libraries, and those were built together.
-        if let Some(linker) = phone_linker() {
-            let _ = skyward_sys::kmsg(&format!(
-                "{}: the recovery's own libraries will not do; it is started with the phone's own",
-                s.path
-            ));
-            let (pid, status) = spawn(s, who, Some(&linker), Arc::new(AtomicBool::new(false)))?;
-            return Ok(format!("pid {pid} ended: {status}"));
-        }
-    }
-    Ok(format!("pid {pid} ended: {status}"))
-}
-
-/// Start the program and wait for it to end. `runner` is the phone's own
-/// linker, when this recovery's libraries will not have the program.
-fn spawn(s: &Service, who: &Credentials, runner: Option<&Path>, refused: Arc<AtomicBool>) -> Result<(u32, ExitStatus)> {
-    let tag = match runner {
-        Some(_) => " through the phone's own linker",
-        None => "",
-    };
-    let mut started = command_with(s, who, runner);
-    started.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = started.spawn().with_context(|| format!("start {}", s.path))?;
-    let mut keepers = Vec::new();
-    if let Some(out) = child.stdout.take() {
-        keepers.push(said(s.path.clone(), out, refused.clone(), tag.to_string()));
-    }
-    if let Some(err) = child.stderr.take() {
-        keepers.push(said(s.path.clone(), err, refused.clone(), tag.to_string()));
-    }
+/// Start the program and wait for it to end.
+fn run(s: &Service, who: &Credentials, given: &Given) -> Result<String> {
+    let handed = given.make()?;
+    let mut child = command(s, who, given, &handed).spawn().with_context(|| format!("start {}", s.path))?;
+    // The program has its sockets now, and as init does, the recovery
+    // keeps none of them open itself.
+    drop(handed);
     let status = child.wait().context("wait for it")?;
-    for k in keepers {
-        let _ = k.join();
-    }
-    Ok((child.id(), status))
-}
-
-/// Whether the file at `path` is a program the linker can load, rather
-/// than a script it would refuse for a different reason: a script's own
-/// error is the script's to report, and the phone's linker would refuse
-/// the script itself.
-fn is_program(path: &str) -> bool {
-    let Ok(mut file) = fs::File::open(path) else { return false };
-    let mut head = [0u8; 4];
-    let Ok(read) = file.read(&mut head) else { return false };
-    read == 4 && &head[..2] != b"#!"
-}
-
-/// The installed system's own linker, where the phone keeps one.
-fn phone_linker() -> Option<PathBuf> {
-    PHONE_LINKERS.iter().map(Path::new).find(|p| p.is_file()).map(Path::to_path_buf)
-}
-
-/// Keep the first [`DAEMON_LINES`] lines a program writes to one of its
-/// streams, and go on reading the rest without keeping it — a program that
-/// fills the pipe must never be blocked by a log that is full.
-fn said(path: String, stream: impl io::Read + Send + 'static, refused: Arc<AtomicBool>, tag: String) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        use io::BufRead;
-        let mut kept = 0;
-        for line in io::BufReader::new(stream).lines() {
-            let Ok(line) = line else { return };
-            if line.trim().is_empty() {
-                continue;
-            }
-            if line.contains(REFUSED) {
-                refused.store(true, Ordering::Relaxed);
-            }
-            if kept < DAEMON_LINES {
-                kept += 1;
-                let said = format!("{path}{tag}: {line}");
-                remember(said.clone());
-                let _ = skyward_sys::kmsg(&said);
-            }
-        }
-    })
+    Ok(format!("pid {} ended: {status}", child.id()))
 }
 
 /// The program as it is started: with what it is given, from the top of the
-/// tree, reading and writing nothing of the recovery's, finding its
-/// libraries where it names them, and as `who`.
-fn command(s: &Service, who: &Credentials) -> Command {
-    command_with(s, who, None)
-}
-
-/// The program to run. Through the phone's own linker, the libraries are
-/// the phone's own and its own linker decides where they are; this
-/// recovery's search path is of no use to it, and is left out.
-fn command_with(s: &Service, who: &Credentials, runner: Option<&Path>) -> Command {
-    let mut cmd = match runner {
-        Some(linker) => {
-            // The phone's own linker takes the program as its first
-            // argument and has no option for the libraries: it reads
-            // LD_LIBRARY_PATH, like any other program it starts.
-            let mut c = Command::new(linker);
-            c.arg(&s.path).args(&s.args);
-            c.env("LD_LIBRARY_PATH", PHONE_LIBRARIES);
-            c
+/// tree, reading and writing nothing of the recovery's, with the
+/// environment init sets it and each of the sockets in `handed` under the
+/// variable that names it, finding its libraries where it names them, and
+/// as `who`. Where init sets it folders of libraries of its own, they are
+/// searched after those it is given here.
+fn command(s: &Service, who: &Credentials, given: &Given, handed: &[(String, OwnedFd)]) -> Command {
+    let mut cmd = Command::new(&s.path);
+    cmd.args(&s.args).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let mut libraries = s.libraries.clone();
+    for (name, value) in &given.environment {
+        match name == LIBRARY_PATH {
+            true => libraries.push(value.clone()),
+            false => {
+                cmd.env(name, value);
+            }
         }
-        None => {
-            let mut c = Command::new(&s.path);
-            c.args(&s.args);
-            c
-        }
-    };
-    cmd.current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    if runner.is_none() && !s.libraries.is_empty() {
-        cmd.env("LD_LIBRARY_PATH", s.libraries.join(":"));
+    }
+    if !libraries.is_empty() {
+        cmd.env(LIBRARY_PATH, libraries.join(":"));
+    }
+    for (variable, socket) in handed {
+        cmd.env(variable, socket.as_raw_fd().to_string());
     }
     let who = who.clone();
+    let sockets: Vec<RawFd> = handed.iter().map(|(_, socket)| socket.as_raw_fd()).collect();
     // Only system calls run between the fork and the exec, on what was
-    // worked out before it.
-    unsafe { cmd.pre_exec(move || who.take_on()) };
+    // worked out before it. The sockets are open in the recovery so that
+    // no other program it starts gets them, and in the program about to
+    // run they have to stay open through the exec.
+    unsafe {
+        cmd.pre_exec(move || {
+            for socket in &sockets {
+                if libc::fcntl(*socket, libc::F_SETFD, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            who.take_on()
+        })
+    };
     cmd
 }
 
@@ -641,58 +540,5 @@ fn wait_for(pid: u32) -> Result<()> {
         if e.kind() != io::ErrorKind::Interrupted {
             return Err(e).context("wait on the pidfd");
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{is_program, PHONE_LIBRARIES};
-
-    fn write(name: &str, head: &[u8]) -> std::path::PathBuf {
-        let at = std::env::temp_dir().join(name);
-        std::fs::write(&at, head).expect("write the file");
-        at
-    }
-
-    #[test]
-    fn a_script_is_not_a_program_the_linker_can_load() {
-        let at = write("skyward-test-script", b"#!/system/bin/sh\necho hi\n");
-        assert!(!is_program(at.to_str().expect("a path")));
-        let _ = std::fs::remove_file(at);
-    }
-
-    #[test]
-    fn a_program_is_one_the_linker_can_load() {
-        let at = write("skyward-test-program", b"\x7fELF\x02\x01\x01\x00");
-        assert!(is_program(at.to_str().expect("a path")));
-        let _ = std::fs::remove_file(at);
-    }
-
-    #[test]
-    fn a_file_that_is_not_there_is_not_a_program() {
-        assert!(!is_program("/nowhere/at/all/skyward"));
-    }
-
-    #[test]
-    fn a_program_that_ends_at_once_is_waited_for_longer_and_longer() {
-        use super::{wait_after, RESTART_BACKOFF_MAX, RESTART_DELAY};
-        // The first crash is waited out as before, and each after it
-        // twice as long.
-        assert_eq!(wait_after(1), RESTART_DELAY * 2);
-        assert_eq!(wait_after(2), RESTART_DELAY * 4);
-        assert_eq!(wait_after(3), RESTART_DELAY * 8);
-        // And it never grows past the cap, however many there are: a
-        // program that cannot run costs the phone a minute at a time,
-        // not more.
-        assert_eq!(wait_after(20), RESTART_BACKOFF_MAX);
-        assert_eq!(wait_after(1000), RESTART_BACKOFF_MAX);
-        assert!(wait_after(1) > RESTART_DELAY, "the wait grows");
-    }
-
-    #[test]
-    fn the_phone_s_libraries_include_the_bootstrap_folder() {
-        // The library of the loader lives in a folder of its own beside the
-        // others, and a linker that is not given it says so.
-        assert!(PHONE_LIBRARIES.contains("/bootstrap:"), "{PHONE_LIBRARIES}");
     }
 }
