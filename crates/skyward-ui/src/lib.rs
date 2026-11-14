@@ -18,7 +18,6 @@ pub mod geom;
 pub mod glow;
 pub mod icons;
 pub mod lang;
-pub mod magisk;
 pub mod motion;
 pub mod pages;
 pub mod search;
