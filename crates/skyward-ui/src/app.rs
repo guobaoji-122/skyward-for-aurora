@@ -968,6 +968,8 @@ pub enum Switch {
     DoubleTap,
     /// Keep a clock on the dark panel.
     AlwaysOn,
+    /// Page animations follow the finger and can be caught.
+    Predictive,
     /// Show the password typed rather than a dot for each character.
     ShowPassword,
 }
@@ -2266,6 +2268,8 @@ pub struct State {
     /// A double tap on the dark panel lights it. Keeping the touch
     /// controller awake costs some standby power, so this can be turned off.
     pub double_tap: bool,
+    /// Page animations can be caught and dragged instead of skipped.
+    pub predictive: bool,
     /// A dark panel keeps a clock on the glass rather than being put out.
     pub always_on: bool,
     /// The language was chosen on the language page, now or at an earlier
@@ -2498,6 +2502,7 @@ impl Default for State {
             aod_style: AodStyle::Digits,
             lang: Lang::Hans,
             double_tap: true,
+            predictive: false,
             always_on: true,
             language_chosen: false,
             dark: false,
@@ -2974,6 +2979,9 @@ enum Drag {
     /// Waiting for the AOD to be wired into the panel loop.
     #[expect(dead_code)]
     Aod { y: f32 },
+    /// A finger has caught a page slide, from the `x` it caught it at and
+    /// the page's front edge then, in pixels.
+    Turn { start: f32, base: i32 },
 }
 
 /// Where the keys are on a page.
@@ -3387,6 +3395,8 @@ struct Turn {
     /// of the screen's width, as a spring settling where it goes; set off
     /// on the first frame of the slide.
     spring: Option<Spring>,
+    /// A finger has caught the slide here, in pixels from the left edge.
+    held: Option<i32>,
 }
 
 /// Whether a control is a row: as wide as the cards it lies on.
@@ -5654,6 +5664,11 @@ impl App {
     /// [`Turn`].
     fn slid(&mut self, now: u64) -> Option<(i32, i32, f32)> {
         let turn = self.turn.as_mut()?;
+        if let Some(front) = turn.held {
+            let along = (front as f32 / self.w as f32).clamp(0.0, 1.0);
+            let w = self.w as f32;
+            return Some((front, (BEHIND_SHIFT * w * (1.0 - along)).round() as i32, BEHIND_DIM * (1.0 - along)));
+        }
         let spring = *turn.spring.get_or_insert_with(|| {
             if turn.back {
                 Spring::new(now, -1000.0, 0.0, BACK_PERIOD)
@@ -5952,7 +5967,7 @@ impl App {
         if let Some(fr) = self.frame.as_ref().filter(|_| self.cols < self.w) {
             left.fill_rect(self.cols as f32, 0.0, (self.w - self.cols) as f32, self.h as f32, fr.bg);
         }
-        self.turn = Some(Turn { back, left, spring: None });
+        self.turn = Some(Turn { back, left, spring: None, held: None });
         self.dirty = true;
     }
 
@@ -7297,6 +7312,7 @@ impl App {
                 let on = match switch {
                     Switch::Vibrate => &mut self.state.vibrate,
                     Switch::DoubleTap => &mut self.state.double_tap,
+                    Switch::Predictive => &mut self.state.predictive,
                     Switch::AlwaysOn => &mut self.state.always_on,
                     Switch::FileTransfer => &mut self.state.file_transfer,
                     Switch::Compress => &mut self.state.compress,
@@ -8319,6 +8335,18 @@ impl App {
                 self.dirty = true;
             }
             self.drop_button();
+            if let Touch::Down(x, _) = ev {
+                if self.state.predictive {
+                    if let Some((front, _, _)) = self.slid(now) {
+                        if let Some(turn) = self.turn.as_mut() {
+                            turn.held = Some(front);
+                        }
+                        self.drag = Drag::Turn { start: x, base: front };
+                        self.dirty = true;
+                        return Vec::new();
+                    }
+                }
+            }
             self.end_turn();
         }
         self.stir(now);
@@ -8463,6 +8491,14 @@ impl App {
                     self.drag_by(last - y);
                     self.drag = Drag::Scroll { last: y };
                 }
+                Drag::Turn { start, base } => {
+                    let front = (base + (x - start) as i32).clamp(0, self.w as i32);
+                    if let Some(turn) = self.turn.as_mut() {
+                        turn.held = Some(front);
+                    }
+                    self.drag = Drag::Turn { start, base };
+                    self.dirty = true;
+                }
                 Drag::Edge { start, from_left, armed, cy, .. } => {
                     let travel = if from_left { x - start } else { start - x };
                     let ready = travel > m.dp(BACK_SWIPE_DP);
@@ -8557,6 +8593,18 @@ impl App {
                         Some(glide) if !(folding(scroll) && folding(glide.at(u64::MAX).0)) => self.fling = Some(glide),
                         _ => self.settle_fold(now),
                     }
+                }
+                Drag::Turn { .. } => {
+                    if let Some(turn) = self.turn.as_mut() {
+                        let front = turn.held.unwrap_or(if turn.back { self.w as i32 } else { 0 });
+                        turn.held = None;
+                        let w = self.w as f32;
+                        let target = if turn.back { w } else { 0.0 };
+                        let x = (front as f32 - target) / w * 1000.0;
+                        turn.spring = Some(Spring::new(now, x, 0.0, if turn.back { BACK_PERIOD } else { OPEN_PERIOD }));
+                    }
+                    self.drag = Drag::Idle;
+                    self.dirty = true;
                 }
                 Drag::Edge { armed: true, .. } => fx.extend(self.back(now)),
                 Drag::Edge { start, from_left, x, cy, .. } => {

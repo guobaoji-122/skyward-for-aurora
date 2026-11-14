@@ -9,7 +9,7 @@
 - `skyward-v0.3.4-aurora-browser.img`
 - 104,857,600 字节
 - ramdisk 约 49.1 MB（压缩后）
-- SHA-256：`27278691b0337013370a9f9736b4e86b9c37d0683f40a4bb8a61dd0b7b369fd7`
+- SHA-256：`14c876a173c60a3abe966bd73c47050e2fb8b63e1034b1f231ff83a71af793d2`
 
 刷入：
 

@@ -422,6 +422,7 @@ pub fn settings(cx: &Ctx) -> Frame {
         Row::new(l.pick(["息屏时钟", "息屏時鐘", "Always-on clock"])).icon(PURPLE, Icon::Clock).trail(Trail::Switch(s.always_on)),
         Row::new(l.pick(["时钟样式", "時鐘樣式", "Clock style"])).icon(PURPLE, Icon::Clock).trail(Trail::Value(s.aod_style.name(l))),
         Row::new(l.pick(["双击亮屏", "雙擊亮屏", "Double-tap to wake"])).icon(PURPLE, Icon::Power).trail(Trail::Switch(s.double_tap)),
+        Row::new(l.pick(["可预测动画", "可預測動畫", "Predictive animations"])).icon(PURPLE, Icon::Layers).trail(Trail::Switch(s.predictive)),
     ]);
     out.extend(hits(&general.rows, &[
         Action::Open(Screen::Language),
@@ -429,6 +430,7 @@ pub fn settings(cx: &Ctx) -> Frame {
         Action::Toggle(Switch::AlwaysOn),
         Action::AodStyle,
         Action::Toggle(Switch::DoubleTap),
+        Action::Toggle(Switch::Predictive),
     ]));
     let note = l.pick([
         "息屏时钟让熄屏时屏幕保持微亮并显示时间；双击亮屏需保持触控上电。两者都会略增待机耗电。",

@@ -53,6 +53,8 @@ pub struct Settings {
     pub file_transfer: bool,
     /// A double tap on the dark panel lights it.
     pub double_tap: bool,
+    /// Page animations can be caught and dragged.
+    pub predictive: bool,
     /// A dark panel keeps a clock on the glass rather than being put out.
     pub always_on: bool,
     pub install: Install,
@@ -134,6 +136,7 @@ impl Settings {
             aod_style: state.aod_style,
             file_transfer: state.file_transfer,
             double_tap: state.double_tap,
+            predictive: state.predictive,
             always_on: state.always_on,
             install: Install { check_signature: state.check_signature, keep_recovery: state.keep_recovery },
             backup: Backup {
@@ -195,6 +198,7 @@ impl Settings {
         state.aod_style = self.aod_style;
         state.file_transfer = self.file_transfer;
         state.double_tap = self.double_tap;
+        state.predictive = self.predictive;
         state.always_on = self.always_on;
         state.check_signature = self.install.check_signature;
         state.keep_recovery = self.install.keep_recovery;
