@@ -30,15 +30,16 @@ use skyward_block::usb::{self, Drive};
 use skyward_net::download::{self, Failure};
 use skyward_net::http::Servers;
 use skyward_net::release::{Installed, Release, Unanswered};
+use skyward_net::localsend::{self, Config as LocalSendConfig, Status as LocalSendStatus};
 use skyward_net::wlan::{Power as WlanPower, Stage as Joining, Wlan};
 use skyward_sys::sleep::{Sleeper, Slept};
 use skyward_sys::uevent;
 use skyward_systems::Who;
 use skyward_ui::app::{
-    App, Asked, BackupAt, BackupEnd, BackupEntry, BackupRefusal, ClashChoice, Data, DownloadEnd, Effect, EraseStop, FileKind, FileOp,
+    App, Asked, Asking, BackupAt, BackupEnd, BackupEntry, BackupRefusal, ClashChoice, Data, DownloadEnd, Effect, EraseStop, FileKind, FileOp,
     FileRow, FileTask, FsAction, FsRow, Have, Held, ItemEnd, ItemState, JobEnd, Keys, MountFailure, Part, PartKind, PartStop, Place,
-    RenameRefused, Screen, Shot, SkywardEnd, SkywardStage, Target, UsbDrive, UsbLink, Wipe, DATA_OPENING, DATA_PARTITION, DOWNLOADS,
-    INSTALL_UNFINISHED, USB_DRIVE,
+    RenameRefused, Screen, Shot, Starter, SkywardEnd, SkywardStage, Target, UsbDrive, UsbLink, Wipe, DATA_OPENING, DATA_PARTITION,
+    DOWNLOADS, INSTALL_UNFINISHED, USB_DRIVE,
 };
 use skyward_ui::settings::Keeper;
 use skyward_ui::surface::kms::KmsSurface;
@@ -1214,6 +1215,8 @@ struct Pages<'a> {
     /// Asking GitHub for Skyward's newest release, and updating to it.
     skyward_checker: Option<updates::Worker>,
     skyward_updater: Option<updates::Worker>,
+    /// The LocalSend endpoint, started from its page while a WLAN is joined.
+    local_send: Option<localsend::Worker>,
     /// The terminal page's shell, from when the page first asks for one.
     shell: Option<pty::Shell>,
     /// The USB drive plugged in, looked for each second.
@@ -1421,6 +1424,7 @@ impl<'a> Pages<'a> {
             downloader: None,
             skyward_checker: None,
             skyward_updater: None,
+            local_send: None,
             shell: None,
             plugged: None,
             seen: None,
@@ -1795,6 +1799,9 @@ impl<'a> Pages<'a> {
         }
         if let Some(c) = &self.skyward_checker {
             fds.push(c.fd());
+        }
+        if let Some(w) = &self.local_send {
+            fds.push(w.fd());
         }
         if let Some(u) = &self.skyward_updater {
             fds.push(u.fd());
@@ -2529,6 +2536,80 @@ impl Pages<'_> {
             Effect::Cancel => self.cancel_install(now)?,
             Effect::ReadMounts => self.app.set_mounts(self.mounts()),
             Effect::ReadSlots => self.app.set_boot_slots(read_slots()),
+            Effect::ReadAvb => self.app.set_avb(read_avb(), verity_mode()),
+            Effect::SetAvb(on) => {
+                let outcome = set_avb(on);
+                let readings = read_avb();
+                self.app.avb_written(outcome, readings, now);
+            }
+            Effect::ReadStarter => self.app.set_starter(read_starter()),
+            Effect::ClearStarter => {
+                let outcome = clear_starter();
+                let readings = read_starter();
+                self.app.starter_cleared(outcome, readings, now);
+            }
+            // The LocalSend endpoint follows its switch: off takes the
+            // worker away, on starts it where a joined WLAN gives the
+            // address announcing and binding need.
+            Effect::LocalSend(on) => {
+                if !on {
+                    self.local_send = None;
+                    self.app.set_local_send(LocalSendStatus {
+                        phase: localsend::Phase::Off,
+                        ..Default::default()
+                    });
+                } else if self.local_send.is_none() {
+                    let address = self
+                        .app
+                        .state
+                        .wlan
+                        .as_ref()
+                        .and_then(|w| w.joined.as_ref())
+                        .and_then(|j| match &j.stage {
+                            Joining::Connected(link) => Some(link.address),
+                            _ => None,
+                        });
+                    match address {
+                        None => {
+                            let why = self.app.state.lang.pick([
+                                "请先连接 WLAN，再开启 LocalSend。",
+                                "請先連線 Wi-Fi，再開啟 LocalSend。",
+                                "Join a Wi-Fi network before turning LocalSend on.",
+                            ]);
+                            skyward_sys::kmsg("LocalSend needs the address a joined WLAN gives")?;
+                            self.app.set_local_send(LocalSendStatus {
+                                phase: localsend::Phase::Failed,
+                                error: Some(why.to_string()),
+                                ..Default::default()
+                            });
+                        }
+                        Some(address) => {
+                            let directory = if self.app.state.data.storage_open() {
+                                PathBuf::from(skyward_crypto::data::SDCARD).join("LocalSend")
+                            } else {
+                                PathBuf::from(skyward_sys::RUN).join("localsend")
+                            };
+                            let cfg = LocalSendConfig {
+                                alias: format!("Skyward ({})", self.info.codename),
+                                model: self.info.model.clone(),
+                                address,
+                                directory,
+                                port: localsend::PORT,
+                            };
+                            match localsend::Worker::start(cfg) {
+                                Ok(w) => self.local_send = Some(w),
+                                Err(e) => {
+                                    self.app.set_local_send(LocalSendStatus {
+                                        phase: localsend::Phase::Failed,
+                                        error: Some(format!("{e:#}")),
+                                        ..Default::default()
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             Effect::SetSlot(slot) => self.app.slot_switched(set_slot(slot), now),
             Effect::ReadSystems => self.systems()?.send(systems::Task::Read),
             // An install still under way may yet write the boot
@@ -2881,7 +2962,7 @@ impl Pages<'_> {
 
     /// Back the parts chosen up into `place`. An install still stopping may
     /// yet write; a backup waits for it.
-    fn back_up(&mut self, parts: [bool; 4], place: Place, compress: bool, verify: bool, now: u64) -> Result<()> {
+    fn back_up(&mut self, parts: [bool; 5], place: Place, compress: bool, verify: bool, now: u64) -> Result<()> {
         ensure!(self.backuper.is_none(), "a backup or restore is under way already");
         if self.installer.is_some() {
             self.app.report(self.app.state.lang.pick(INSTALL_UNFINISHED), now);
@@ -2918,7 +2999,7 @@ impl Pages<'_> {
 
     /// Restore the parts chosen of the backup `name` in `place`. An install
     /// still stopping may yet write; a restore waits for it.
-    fn restore(&mut self, place: Place, name: &str, parts: [bool; 4], now: u64) -> Result<()> {
+    fn restore(&mut self, place: Place, name: &str, parts: [bool; 5], now: u64) -> Result<()> {
         ensure!(self.backuper.is_none(), "a backup or restore is under way already");
         if self.installer.is_some() {
             self.app.report(self.app.state.lang.pick(INSTALL_UNFINISHED), now);
@@ -3016,4 +3097,123 @@ impl Pages<'_> {
         }
         Ok(())
     }
+}
+
+/// Whether the USB port is currently a host (a drive attached) or a
+/// device (adb and MTP); flipping it takes a moment, so it is remembered.
+static PORT_HOST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn doze_brightness() {
+    let root = Path::new("/sys/class/mi_display");
+    let mut path: Option<PathBuf> = None;
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let p = entry.path().join("doze_brightness");
+            if p.exists() {
+                path = Some(p);
+                break;
+            }
+        }
+    }
+    let Some(path) = path else {
+        return;
+    };
+    if let Err(e) = fs::write(&path, "1") {
+        let _ = skyward_sys::kmsg(&format!("the panel's doze brightness was not set: {e}"));
+    }
+}
+
+fn host_port(host: bool) -> Result<()> {
+    use std::sync::atomic::Ordering;
+    if PORT_HOST.load(Ordering::Relaxed) == host {
+        return Ok(());
+    }
+    if host {
+        skyward_sys::usb::set("none", USB_TIMEOUT)?;
+        skyward_block::usb::set_host(true)?;
+    } else {
+        skyward_block::usb::set_host(false)?;
+        skyward_sys::usb::switch(skyward_sys::usb::resting(), USB_TIMEOUT)?;
+    }
+    PORT_HOST.store(host, Ordering::Relaxed);
+    skyward_sys::kmsg(&format!("the USB port is a {}", if host { "host, for a drive" } else { "device, for adb and MTP" }))?;
+    Ok(())
+}
+
+fn read_avb() -> Result<Vec<skyward_vab::avb::Reading>, String> {
+    let read = || -> Result<Vec<skyward_vab::avb::Reading>> {
+        let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
+        skyward_vab::avb::read(slot)
+    };
+    read().map_err(|e| format!("{e:#}"))
+}
+
+fn verity_mode() -> Option<String> {
+    skyward_sys::prop("ro.boot.veritymode")
+}
+
+fn set_avb(on: bool) -> Result<Vec<skyward_vab::avb::Change>, String> {
+    let write = || -> Result<Vec<skyward_vab::avb::Change>> {
+        let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
+        if on {
+            let folder = crate::avbkeep::existing();
+            let restored = skyward_vab::avb::enable(slot, folder.as_deref())?;
+            if !restored.is_empty() {
+                let at = folder.map(|f| f.display().to_string()).unwrap_or_default();
+                let _ = skyward_sys::kmsg(&format!("avb: {} blocks put back from {}", restored.len(), at));
+                return Ok(restored);
+            }
+        }
+        let flags = if on {
+            0
+        } else {
+            skyward_vab::avb::HASHTREE_DISABLED | skyward_vab::avb::VERIFICATION_DISABLED
+        };
+        let kept = crate::avbkeep::folder()?;
+        let changes = skyward_vab::avb::set_all(slot, flags, &kept)?;
+        if changes.iter().any(|c| c.kept.is_some()) {
+            // The copies are of no use to whoever needs them without the way
+            // back written beside them, but the blocks are already changed:
+            // the note failing must not report the change as not made.
+            if let Err(e) = crate::avbkeep::note(&kept, slot) {
+                let _ = skyward_sys::kmsg(&format!("the way back beside the kept blocks is not written: {e:#}"));
+            }
+        }
+        Ok(changes)
+    };
+    write().map_err(|e| format!("{e:#}"))
+}
+
+fn read_starter() -> Result<Starter, String> {
+    let read = || -> Result<Starter> {
+        let bcb = bcb::read(&bcb::misc())?;
+        let request = bcb.request();
+        let asks = match &request.work {
+            Work::Menu => Asking::Nothing,
+            Work::Fastboot => Asking::Fastboot,
+            Work::Update(update) => Asking::Update(update.package.clone()),
+            Work::WipeData { reformat } => Asking::WipeData { reformat: reformat.clone() },
+            Work::PromptWipeData => Asking::PromptWipeData,
+            Work::WipeCache { .. } => Asking::WipeCache,
+            Work::WipeAb { .. } => Asking::WipeAb,
+            Work::Sideload { .. } => Asking::Sideload,
+            Work::Rescue => Asking::Rescue,
+            Work::UnshareBlocks => Asking::Unshare,
+            Work::Exit => Asking::Exit,
+            Work::Unsupported(what) => Asking::Unsupported(what.clone()),
+            // A system switch or a stopped second system comes back here to
+            // the plain menu; the switch itself was done before the reboot.
+            Work::SwitchSystem { .. } | Work::SystemStopped => Asking::Nothing,
+        };
+        Ok(Starter { command: bcb.command, asks, reason: request.reason, args: bcb.args })
+    };
+    read().map_err(|e| format!("{e:#}"))
+}
+
+fn clear_starter() -> Result<(), String> {
+    let misc = bcb::misc();
+    let asked = bcb::read(&misc).map(|b| b.command).unwrap_or_default();
+    bcb::clear(&misc).map_err(|e| format!("{e:#}"))?;
+    let _ = skyward_sys::kmsg(&format!("took the bootloader message {asked:?} out of misc"));
+    Ok(())
 }

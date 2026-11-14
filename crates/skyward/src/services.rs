@@ -9,7 +9,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io;
 use std::io::Read;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -257,7 +259,7 @@ fn readied(program: &Started, libraries: Option<&Path>, known: &HashMap<String, 
 /// Start the program, wait until it ends and give how it ended.
 fn to_its_end(s: &Service, who: &Credentials, given: &Given) -> Result<ExitStatus> {
     let handed = given.make()?;
-    command(s, who, given, &handed).status().with_context(|| format!("run {}", s.path))
+    command_given(s, who, given, &handed).status().with_context(|| format!("run {}", s.path))
 }
 
 /// What init hands a program as it starts it besides what its line gives
@@ -492,6 +494,42 @@ fn ready(s: &Service) -> Result<()> {
     }
 }
 
+/// The program to run: through the phone's own linker where it names no
+/// libraries of its own, with the environment init sets it and each of the
+/// sockets in `handed` under the variable that names it, and as `who`.
+fn command_given(s: &Service, who: &Credentials, given: &Given, handed: &[(String, OwnedFd)]) -> Command {
+    let mut cmd = Command::new(&s.path);
+    cmd.args(&s.args).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let mut libraries = s.libraries.clone();
+    for (name, value) in &given.environment {
+        match name == LIBRARY_PATH {
+            true => libraries.push(value.clone()),
+            false => {
+                cmd.env(name, value);
+            }
+        }
+    }
+    if !libraries.is_empty() {
+        cmd.env(LIBRARY_PATH, libraries.join(":"));
+    }
+    for (variable, socket) in handed {
+        cmd.env(variable, socket.as_raw_fd().to_string());
+    }
+    let who = who.clone();
+    let sockets: Vec<RawFd> = handed.iter().map(|(_, socket)| socket.as_raw_fd()).collect();
+    unsafe {
+        cmd.pre_exec(move || {
+            for socket in &sockets {
+                if libc::fcntl(*socket, libc::F_SETFD, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            who.take_on()
+        })
+    };
+    cmd
+}
+
 fn supervise(s: &Service, who: &Credentials) {
     // A program that crashes at once is one that cannot run here. Left to
     // itself it is started again a second later, and again a second after
@@ -509,7 +547,7 @@ fn supervise(s: &Service, who: &Credentials) {
         let started = Instant::now();
         let ended = match running(&s.path) {
             Some(pid) => wait_for(pid).map(|()| format!("pid {pid}, left by an earlier recovery service, exited")),
-            None => run(s, who, given),
+            None => run(s, who),
         };
         let line = match ended {
             Ok(how) => format!("{}: {how}", s.path),
@@ -680,20 +718,8 @@ fn command_with(s: &Service, who: &Credentials, runner: Option<&Path>) -> Comman
         cmd.env("LD_LIBRARY_PATH", s.libraries.join(":"));
     }
     let who = who.clone();
-    let sockets: Vec<RawFd> = handed.iter().map(|(_, socket)| socket.as_raw_fd()).collect();
-    // Only system calls run between the fork and the exec, on what was
-    // worked out before it. The sockets are open in the recovery so that
-    // no other program it starts gets them, and in the program about to
-    // run they have to stay open through the exec.
     unsafe {
-        cmd.pre_exec(move || {
-            for socket in &sockets {
-                if libc::fcntl(*socket, libc::F_SETFD, 0) != 0 {
-                    return Err(io::Error::last_os_error());
-                }
-            }
-            who.take_on()
-        })
+        cmd.pre_exec(move || who.take_on())
     };
     cmd
 }

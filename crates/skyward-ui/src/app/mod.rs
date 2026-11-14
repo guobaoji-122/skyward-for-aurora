@@ -34,6 +34,40 @@ use skyward_systems::{Overview, Who};
 use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
 
 mod act;
+mod aurora;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Asking {
+    /// Nothing: recovery starts on its own pages.
+    #[default]
+    Nothing,
+    /// The recovery's userspace fastboot.
+    Fastboot,
+    /// Install the update package at this path.
+    Update(String),
+    /// Erase all user data, made afresh as this filesystem where one is
+    /// named.
+    WipeData { reformat: Option<String> },
+    /// Say that Android cannot start, and offer to erase all user data.
+    PromptWipeData,
+    /// Erase the cache partition.
+    WipeCache,
+    /// Erase the phone by the wipe package the system left behind.
+    WipeAb,
+    /// Wait for a package over `adb sideload`.
+    Sideload,
+    /// Wait for `adb rescue` on a computer.
+    Rescue,
+    /// Undo the sharing of blocks so the partitions can be written to.
+    Unshare,
+    /// Start the system at once.
+    Exit,
+    /// Work the recovery does not do, as it was asked.
+    Unsupported(String),
+}
+
+pub use backup::{BACKUP_PARTS, BACKUP_RESTORABLE};
+pub use aurora::{AodStyle, Queued, Starter};
 mod backup;
 mod decrypt;
 mod draw;
@@ -154,6 +188,13 @@ pub enum Screen {
     /// The installed system and the one Skyward installed beside it: which
     /// of them starts, switching between them, and taking the other away.
     Systems,
+    /// What the phone's vbmeta blocks say, and turning the two checks off
+    /// or back on.
+    Avb,
+    /// The bootloader message in misc, as the phone last left it.
+    Bcb,
+    /// The LocalSend file transfer, sending files to the computer.
+    LocalSend,
     /// The phone's own fastbootd serving the computer's fastboot, and where
     /// to go from it. Its only page, worked with the keys: the partitions
     /// the touchscreen runs from are left out while fastbootd rewrites
@@ -222,7 +263,10 @@ pub enum Confirm {
     /// Take the other system away.
     RemoveSystem,
     /// Install the system the installer holds with the room chosen.
-    InstallSystem,
+    InstallSystem,    Avb(bool),
+    ClearStarter,
+    InstallQueue,
+
 }
 
 /// What a control does when touched.
@@ -383,7 +427,10 @@ pub enum Action {
     /// Stop downloading the build.
     StopSkywardUpdate,
     /// A control whose work is not wired up yet; touching it says so.
-    Unavailable(&'static str),
+    Unavailable(&'static str),    QueuePick(Place),
+    QueueDrop(usize),
+    AodStyle,
+
 }
 
 /// One finger, in screen pixels.
@@ -551,10 +598,10 @@ pub enum Effect {
     /// a folder of their own in `place`, telling how it goes with
     /// [`App::backup_started`], [`App::backup_plan`], [`App::backup_at`]
     /// and [`App::backup_ended`].
-    Backup { parts: [bool; 4], place: Place, compress: bool, verify: bool },
+    Backup { parts: [bool; 5], place: Place, compress: bool, verify: bool },
     /// Restore the parts ticked of the backup in the folder `name` of
     /// `place`, telling how it goes as a backup does.
-    Restore { place: Place, name: String, parts: [bool; 4] },
+    Restore { place: Place, name: String, parts: [bool; 5] },
     /// Look for backups in the places that can be read, telling what is
     /// found with [`App::set_backups`].
     FindBackups { storage: bool, usb: bool },
@@ -589,6 +636,12 @@ pub enum Effect {
     /// Merge the update that waits in the slot the phone runs from,
     /// telling how it goes with [`App::set_update`].
     Merge,
+    ReadAvb,
+    SetAvb(bool),
+    ReadStarter,
+    ClearStarter,
+    LocalSend(bool),
+
 }
 
 enum Drag {
@@ -1053,6 +1106,8 @@ fn keyboard_strip(t: &Theme, frame: &Frame) -> (Canvas, i32) {
 }
 
 pub struct App {
+    /// The settings changed at the pages wait to be written.
+    settings_dirty: bool,
     pub state: State,
     /// The pages open, the one shown last: each with how far it is
     /// scrolled and where the keys are on it.
@@ -1199,6 +1254,7 @@ impl App {
     pub fn new(start: Screen, w: u32, h: u32, px_per_dp: f32) -> Self {
         App {
             state: State::default(),
+            settings_dirty: false,
             stack: vec![(start, 0.0, Focus::Unset)],
             frame: None,
             spots: None,

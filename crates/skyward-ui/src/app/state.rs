@@ -1,6 +1,8 @@
 //! What the pages show and the user changes, all in one place.
 
 use super::*;
+use skyward_net::localsend::Status as LocalSendStatus;
+use skyward_vab::avb::{Change as AvbChange, Reading as AvbReading};
 
 /// Choices the pages show and the user changes, and where installing
 /// stands.
@@ -60,7 +62,7 @@ pub struct State {
     pub mounts: Result<Vec<MountRow>, String>,
     pub mount_failure: Option<MountFailure>,
     /// Which of [`BACKUP_PARTS`] a backup takes.
-    pub backup: [bool; 4],
+    pub backup: [bool; 5],
     /// Where a backup goes.
     pub backup_to: Place,
     pub compress: bool,
@@ -69,7 +71,7 @@ pub struct State {
     pub backups: Vec<BackupEntry>,
     /// The backup the restore page shows, as it was found, and which of its
     /// parts to restore.
-    pub restore: Option<(BackupEntry, [bool; 4])>,
+    pub restore: Option<(BackupEntry, [bool; 5])>,
     /// Backing up or restoring under way, or how it last ended.
     pub backup_job: Option<BackupJob>,
     /// Which logs to export: the recovery's, the kernel's.
@@ -181,6 +183,50 @@ pub struct State {
     pub skyward_job: Option<SkywardJob>,
     /// How fast data went over the network joined in the last second.
     pub traffic: Traffic,
+    /// A dark panel keeps a clock on the glass rather than being put out.
+    pub always_on: bool,
+    /// The day and the day of the week the AOD shows under the clock, as
+    /// [`fmt::aod_date`] wrote them last.
+    pub aod_date: String,
+    /// The look of the AOD's clock.
+    pub aod_style: AodStyle,
+    /// A double tap on the dark panel lights it. Keeping the touch
+    /// controller awake costs some standby power, so this can be turned off.
+    pub double_tap: bool,
+    /// What the phone's vbmeta blocks say, as the runtime last read them for
+    /// the AVB page, or why it could not.
+    pub avb: Option<Result<Vec<AvbReading>, String>>,
+    /// The last change the AVB page made, block by block, or why it made
+    /// none.
+    pub avb_result: Option<Result<Vec<AvbChange>, String>>,
+    /// What the bootloader made of those flags when the phone last started:
+    /// `enforcing`, `disabled`, or whatever else it calls it. A change to the
+    /// flags shows here only once the phone starts again.
+    pub verity: Option<String>,
+    /// What the bootloader message in misc asks for, as the runtime last
+    /// read it for its page, or why it could not be read.
+    pub starter: Option<Result<Starter, String>>,
+    /// How taking that message away went, where the page was used to.
+    pub starter_cleared: Option<Result<(), String>>,
+    /// The LocalSend endpoint, as the runtime last told it. It starts off
+    /// until its switch is turned on.
+    pub local_send: LocalSendStatus,
+    /// The slide that asked what it was about to do, and whose second slide
+    /// does it. Only the actions that can leave the phone unable to start, or
+    /// take data that cannot come back, are slid twice.
+    pub armed: Option<Confirm>,
+    /// The packages waiting to be installed, in the order they were chosen.
+    /// The one being installed is not among them.
+    pub queue: Vec<Queued>,
+    /// Whether the queue is actively running (i.e. started by the user
+    /// choosing "install queue", not by a standalone install). A normal
+    /// install must not advance a queue that the user never started.
+    pub queue_active: bool,
+    /// Whether the package being chosen from a place goes on the queue
+    /// rather than starting at once.
+    pub queue_picking: bool,
+    /// The package whose install failed, which stopped the queue there.
+    pub queue_stopped: Option<String>,
 }
 
 impl Default for State {
@@ -212,7 +258,7 @@ impl Default for State {
             reflash: None,
             mounts: Ok(Vec::new()),
             mount_failure: None,
-            backup: [true, true, false, true],
+            backup: [true, true, false, true, false],
             backup_to: Place::Storage,
             compress: false,
             verify: true,
@@ -266,6 +312,21 @@ impl Default for State {
             skyward_check: SkywardCheck::Idle,
             skyward_job: None,
             traffic: Traffic::default(),
+            always_on: true,
+            aod_date: String::new(),
+            aod_style: AodStyle::Digits,
+            double_tap: true,
+            avb: None,
+            avb_result: None,
+            verity: None,
+            starter: None,
+            starter_cleared: None,
+            local_send: LocalSendStatus::default(),
+            armed: None,
+            queue: Vec::new(),
+            queue_active: false,
+            queue_picking: false,
+            queue_stopped: None,
         }
     }
 }
@@ -344,7 +405,7 @@ impl State {
     /// phone also keeps its recovery in a partition of each slot.
     pub fn offers(&self, screen: Screen) -> bool {
         match screen {
-            Screen::Wlan => self.wlan.is_some(),
+            Screen::Wlan | Screen::LocalSend => self.wlan.is_some(),
             Screen::SkywardUpdate => self.wlan.is_some() && self.recovery_partitions,
             Screen::Systems => self.dual_boot,
             _ => true,

@@ -116,6 +116,7 @@ fn run(phone: &Phone, command: &[String]) -> Result<Started> {
         user: as_whom.get(1).cloned(),
         groups: as_whom.iter().skip(2).cloned().collect(),
         capabilities: Vec::new(),
+        ..Service::default()
     };
     Ok(Started::from(service))
 }

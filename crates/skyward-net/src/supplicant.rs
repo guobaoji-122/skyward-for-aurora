@@ -142,6 +142,12 @@ pub fn unescape(text: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Bytes as hex digits, the way a value the supplicant takes as it is,
+/// with nothing to escape, is written.
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// What sets up a network with id `id` to join it: its name, how it is
 /// protected and its password. The name and a WPA3 password go as hex,
 /// which takes any byte; a WPA2 password goes in quotes, which the

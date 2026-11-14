@@ -54,8 +54,6 @@ pub struct Visible {
     pub filesystem: String,
 }
 
-<<<<<<< HEAD
-use std::path::Path;
 
 /// Whether the mount table's line for `path` says read-only, if it has one:
 /// `None` where nothing is mounted there. Later lines are mounts stacked
@@ -78,7 +76,8 @@ fn read_only_in(table: &str, path: &Path) -> Option<bool> {
         }
     }
     found
-=======
+}
+
 /// The room in a filesystem, in bytes: all of it, what no file takes, and
 /// the part of that left for files other than the system's own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,7 +104,6 @@ fn statvfs(path: &Path) -> io::Result<libc::statvfs> {
         return Err(io::Error::last_os_error());
     }
     Ok(s)
->>>>>>> upstream-ssh/main
 }
 
 #[cfg(target_os = "android")]
@@ -595,7 +593,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn a_mount_table_says_which_mount_points_are_read_only() {
         let table = "\
 /dev/block/dm-2 /mnt/system erofs ro,seclabel,relatime 0 0\n\
@@ -613,13 +610,14 @@ tmpfs /tmp tmpfs rw,seclabel 0 0\n";
 /dev/block/dm-3 /mnt/vendor erofs ro,relatime 0 0\n\
 /dev/block/dm-9 /mnt/vendor erofs rw,relatime 0 0\n";
         assert_eq!(read_only_in(table, Path::new("/mnt/vendor")), Some(false));
-=======
+    }
+
+    #[test]
     fn a_filesystems_room_is_all_of_it_what_is_free_and_what_is_left_for_others() {
         let room = space(&std::env::temp_dir()).unwrap();
         assert!(room.total > 0);
         assert!(room.total >= room.free && room.free >= room.available, "{room:?}");
         assert_eq!(space(Path::new("/no/such/folder")).unwrap_err().kind(), io::ErrorKind::NotFound);
         assert_eq!(space(Path::new("/tmp/a\0b")).unwrap_err().kind(), io::ErrorKind::InvalidInput);
->>>>>>> upstream-ssh/main
     }
 }

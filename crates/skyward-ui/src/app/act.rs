@@ -13,13 +13,28 @@ impl App {
                     // page easing there for the keys gets there at once.
                     if let Some((rest, _)) = self.seek.take() {
                         self.top_mut().1 = rest;
-                    }
+                }
                     self.start_morph(true, now);
                     self.push(s);
                 } else {
                     self.open(s);
                 }
                 return self.arrive_at(s);
+            }
+            Action::QueuePick(place) => {
+                self.state.queue_picking = true;
+                self.open(Screen::Choose(place));
+                return self.arrive_at(Screen::Choose(place));
+            }
+            Action::QueueDrop(i) => {
+                self.queue_dropped(i);
+                return Vec::new();
+            }
+            Action::AodStyle => {
+                self.state.aod_style = self.state.aod_style.next();
+                self.refresh();
+                self.settings_dirty = true;
+                return Vec::new();
             }
             Action::OpenData => return self.open_data(),
             Action::Skip => {
@@ -53,6 +68,9 @@ impl App {
                     Switch::Vibrate => &mut self.state.vibrate,
                     Switch::FileTransfer => &mut self.state.file_transfer,
                     Switch::Compress => &mut self.state.compress,
+                    Switch::DoubleTap => &mut self.state.double_tap,
+                    Switch::LocalSend => unreachable!("the LocalSend switch is turned in its own page"),
+                    Switch::AlwaysOn => &mut self.state.always_on,
                     Switch::Verify => &mut self.state.verify,
                     Switch::Signature => &mut self.state.check_signature,
                     Switch::KeepRecovery => &mut self.state.keep_recovery,
@@ -259,7 +277,7 @@ impl App {
             // All a backup holds is ticked to restore at first.
             Action::OpenBackup(i) => {
                 let entry = self.state.backups[i].clone();
-                let parts = entry.held.as_ref().map_or([false; 4], |h| h.parts);
+                let parts = entry.held.as_ref().map_or([false; 5], |h| h.parts);
                 self.state.restore = Some((entry, parts));
                 self.state.asking_delete = false;
                 self.open(Screen::RestoreBackup);
@@ -702,6 +720,21 @@ impl App {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
             Confirm::Reboot => fx.push(Effect::Reboot(TARGETS[self.state.reboot])),
+            Confirm::Avb(on) => fx.push(Effect::SetAvb(on)),
+            Confirm::ClearStarter => fx.push(Effect::ClearStarter),
+            // The queue begins with the package at its head, which leaves the
+            // queue and becomes the one being installed.
+            Confirm::InstallQueue => {
+                if let Some(next) = self.state.queue.first().cloned() {
+                    self.state.queue.remove(0);
+                    self.state.queue_active = true;
+                    self.state.queue_stopped = None;
+                    let (path, name) = (next.path, next.name);
+                    self.begin_install(Install::Checking { size: next.size, stage: None }, next.source, Some(name));
+                    self.open(Screen::Installing);
+                    fx.push(Effect::InstallPath(path));
+                }
+            }
             Confirm::Wipe => {
                 let chosen: Vec<Wipe> = WIPES.iter().zip(self.state.wipe).filter(|(_, on)| *on).map(|(&w, _)| w).collect();
                 match chosen.is_empty() {

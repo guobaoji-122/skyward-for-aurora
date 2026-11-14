@@ -399,7 +399,7 @@ pub struct Partitions {
 /// A program from the phone's own partitions that the recovery keeps
 /// running, such as the touch processing of a panel that hands raw frames
 /// to the host.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct Service {
     pub path: String,
     /// Other paths the same service is known by on other builds of the
@@ -443,6 +443,12 @@ pub struct Service {
     /// puts in place of another on some builds of the hardware.
     #[serde(default)]
     pub description: Option<String>,
+    /// The description itself, where the phone has none that names the
+    /// service the way the directory wants it read. Written beside the
+    /// others before any service starts, which is when the directory reads
+    /// them — a file a service writes later would come too late.
+    #[serde(default)]
+    pub description_text: Option<String>,
     /// A service the program registers with the other directory, the one
     /// the phone's hardware services of the older kind use. It is written
     /// as the interface and then which of them it is.

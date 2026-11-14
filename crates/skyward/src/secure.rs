@@ -33,6 +33,7 @@ const VENDOR_INTERFACE: &str = "ro.vndk.version";
 /// Where a recovery looks for the descriptions of the services the running
 /// system carries, and the one the recovery writes there of the phone's
 /// own.
+const DESCRIPTIONS: [&str; 2] = ["/vendor/etc/vintf/manifest", "/odm/etc/vintf/manifest"];
 const RECOVERY_DESCRIPTIONS: &str = "/system/etc/vintf/manifest";
 const PHONE_DESCRIPTION: &str = "phone.xml";
 
@@ -294,6 +295,12 @@ fn tag(block: &str, name: &str) -> Option<String> {
 }
 
 /// Every instance a description declares, in either of the two spellings.
+fn describes(text: &str, name: &str) -> bool {
+    let Some((interface, instance)) = name.rsplit_once('/') else { return false };
+    let Some((package, interface)) = interface.rsplit_once('.') else { return false };
+    text.contains(package) && text.contains(&format!("{interface}/{instance}"))
+}
+
 fn named_instances(text: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let mut rest = text;
@@ -435,7 +442,7 @@ pub fn publish_descriptions(wanted: &[String], files: &[String], texts: &[String
             let _ = skyward_sys::kmsg(&format!("not all of the phone's services registered again: {e:#}"));
         }
     }
-    Ok(())
+    Ok(copied)
 }
 
 /// What has registered with the service directory, each with the init

@@ -1831,12 +1831,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pretty-hex"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a65843dfefbafd3c879c683306959a6de478443ffe9c9adf02f5976432402d7"
-
-[[package]]
 name = "primeorder"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2041,16 +2035,6 @@ dependencies = [
 [[package]]
 name = "rsproperties"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e92cdbbe82223006ba7f16e6178dd9b24fbb967d000a096e8dc4129560d7ab41"
-dependencies = [
- "log",
- "pretty-hex",
- "rustix",
- "thiserror",
- "zerocopy",
- "zerocopy-derive",
-]
 
 [[package]]
 name = "rsqlite-vfs"
@@ -2569,6 +2553,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "skyward-block",
+ "tempfile",
  "ureq",
 ]
 

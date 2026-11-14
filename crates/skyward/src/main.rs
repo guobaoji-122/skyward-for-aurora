@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
-use skyward_config::{ramdisk, DeviceConfig};
+use skyward_config::{ramdisk, DeviceConfig, Service};
 #[cfg(target_os = "android")]
 use skyward_programs::secure::Started;
 use skyward_sys::{bcb, Power};
@@ -359,7 +359,8 @@ fn main() -> Result<()> {
         Cmd::Services { config } => {
             let slot = booted_slot()?;
             let props = skyward_info::installed_props(slot)?;
-            let services: Vec<Started> = DeviceConfig::load(&config)?.services.into_iter().filter(|s| s.runs_on(&props)).map(Started::from).collect();
+            let started: Vec<Started> = DeviceConfig::load(&config)?.services.into_iter().filter(|s| s.runs_on(&props)).map(Started::from).collect();
+            let services: Vec<Service> = started.iter().map(|p| p.service.clone()).collect();
             let libraries = secure::libraries()?;
             services::start(&services, libraries.as_deref())?;
             keys::start(&keys::found(slot, libraries.as_deref())?.steps?, libraries.as_deref())?;
@@ -727,7 +728,8 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     {
         skyward_sys::kmsg(&format!("logd not started: {e:#}"))?;
     }
-    let services: Vec<Started> = cfg.services.iter().filter(|s| s.runs_on(&props)).cloned().map(Started::from).collect();
+    let services: Vec<Service> = cfg.services.iter().filter(|s| s.runs_on(&props)).cloned().collect();
+    let started: Vec<Started> = services.iter().cloned().map(Started::from).collect();
     // The drivers ask for their firmware by name, and the kernel looks only
     // in folders of its own unless told to pass on what it does not find
     // there to ueventd, which looks in the recovery's firmware folders.
@@ -772,7 +774,7 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     // anything registers with it, so both are told of the configuration's
     // programs and of those that use the phone's keys together.
     let key_programs = found.as_deref().map(keys::programs).unwrap_or_default();
-    let programs = || services.iter().map(|p| &p.service).chain(&key_programs);
+    let programs = || services.iter().chain(&key_programs);
     let hardware: Vec<String> = programs().filter_map(|s| s.ready_hardware_service.clone()).collect();
     if !hardware.is_empty() {
         secure::prepare_hardware_directory(&hardware)?;

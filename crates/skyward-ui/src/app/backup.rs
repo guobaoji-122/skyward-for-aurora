@@ -3,12 +3,15 @@
 use super::*;
 
 /// What a backup can take, in the order the backup page lists it.
-pub const BACKUP_PARTS: [Text; 4] = [
+pub const BACKUP_PARTS: [Text; 5] = [
     ["启动分区", "啟動分割區", "Boot partitions"],
     ["系统分区", "系統分割區", "System partitions"],
     ["data 分区", "data 分割區", "data partition"],
     ["基带与 EFS", "基頻與 EFS", "Modem and EFS"],
+    ["bootloader 链", "bootloader 鏈", "Bootloader chain"],
 ];
+
+pub const BACKUP_RESTORABLE: [bool; 5] = [true, true, true, true, false];
 
 /// A backup found in a place's Skyward/backups folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,7 +32,7 @@ pub struct Held {
     /// The bytes its files take.
     pub size: u64,
     /// Which of [`BACKUP_PARTS`] it holds.
-    pub parts: [bool; 4],
+    pub parts: [bool; 5],
     /// The phone it was made on, by its codename, the system it ran, as
     /// its version reads, and the slot it was made from.
     pub device: String,
@@ -210,7 +213,7 @@ mod tests {
     }
 
     /// A backup found in `place`, made at `made`, holding `parts`.
-    fn found(place: Place, made: i64, parts: [bool; 4]) -> BackupEntry {
+    fn found(place: Place, made: i64, parts: [bool; 5]) -> BackupEntry {
         let held = Held {
             made,
             size: 6_200_000_000,
