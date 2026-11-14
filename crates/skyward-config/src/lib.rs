@@ -41,60 +41,11 @@ pub mod ramdisk {
     }
 }
 
-/// The panel's own doze, on phones whose display driver keeps one: a dark
-/// panel then holds a face on the glass with the backlight out, rather than
-/// being put out, and comes back out of it as the pages return.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct Aod {
-    /// The display driver's folder for the panel: it holds the node that
-    /// lists the driver's features, and one node per feature.
-    #[serde(default = "default_aod_dir")]
-    pub dir: String,
-    /// The node a command set's number is written to, which has the driver
-    /// send that set to the panel.
-    #[serde(default = "default_aod_node")]
-    pub node: String,
-    /// The driver's features written as the panel goes into its doze, each
-    /// by the number `disp_param` gives it.
-    #[serde(default)]
-    pub enter: Vec<Feature>,
-    /// The command sets sent as it goes in.
-    #[serde(default)]
-    pub enter_cmds: Vec<u32>,
-    /// The features written as it comes back out.
-    #[serde(default)]
-    pub leave: Vec<Feature>,
-    /// The command sets sent as it comes back out.
-    #[serde(default)]
-    pub leave_cmds: Vec<u32>,
-}
-
-/// One of the display driver's features, as `disp_param` lists it: the number
-/// it gives the feature in brackets after its name, and the value to write.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct Feature {
-    /// The number in brackets after the feature's name.
-    pub id: u32,
-    /// What is written to the feature's node, as text.
-    pub value: String,
-}
-
-fn default_aod_dir() -> String {
-    "/sys/class/mi_display/disp-DSI-0".into()
-}
-
-fn default_aod_node() -> String {
-    "/proc/mi_display/tx_cmd_set_prim".into()
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeviceConfig {
     pub device: Device,
     #[serde(default)]
     pub display: Display,
-    /// The panel's own doze, on phones whose display driver keeps one.
-    #[serde(default)]
-    pub aod: Option<Aod>,
     #[serde(default)]
     pub modules: Modules,
     #[serde(default)]
@@ -322,7 +273,7 @@ pub struct Device {
     pub os_version_prop: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Display {
     #[serde(default)]
     pub width: u32,
@@ -337,24 +288,6 @@ pub struct Display {
     /// sliding over another rounds its leading corners to it.
     #[serde(default)]
     pub corner_radius: u32,
-    /// The exponent the slider's position is raised to before it is
-    /// written, so the light rises evenly to the eye on panels whose own
-    /// curve is not even. One passes the slider straight through.
-    #[serde(default = "default_gamma")]
-    pub gamma: f32,
-}
-
-impl Default for Display {
-    /// A page laid out for no panel yet, its slider as the position it is
-    /// given until the phone says otherwise.
-    fn default() -> Self {
-        Self { width: 0, height: 0, density: 0, diagonal: None, corner_radius: 0, gamma: default_gamma() }
-    }
-}
-
-/// The default backlight curve: the slider passes straight through.
-fn default_gamma() -> f32 {
-    1.0
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -402,12 +335,6 @@ pub struct Partitions {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Service {
     pub path: String,
-    /// Other paths the same service is known by on other builds of the
-    /// hardware, tried in order where `path` is absent: a vendor binary
-    /// whose name the installed ROM changed keeps the service for phones
-    /// still on the older one.
-    #[serde(default)]
-    pub alternates: Option<Vec<String>>,
     /// What the program is given after its own path, as init gives a
     /// service the words after its path.
     #[serde(default)]
@@ -433,22 +360,6 @@ pub struct Service {
     /// directory takes only when they are described to it as well.
     #[serde(default)]
     pub registers: Vec<String>,
-    /// Android-init-style sockets to create under /dev/socket and hand to
-    /// the program the way init does, through ANDROID_SOCKET_<name>.
-    #[serde(default)]
-    pub sockets: Vec<String>,
-
-    /// The file that describes what the program registers, where the phone
-    /// keeps that file apart from its other descriptions, as one its init
-    /// puts in place of another on some builds of the hardware.
-    #[serde(default)]
-    pub description: Option<String>,
-    /// The description itself, where the phone has none that names the
-    /// service the way the directory wants it read. Written beside the
-    /// others before any service starts, which is when the directory reads
-    /// them — a file a service writes later would come too late.
-    #[serde(default)]
-    pub description_text: Option<String>,
     /// A service the program registers with the other directory, the one
     /// the phone's hardware services of the older kind use. It is written
     /// as the interface and then which of them it is.
@@ -474,14 +385,6 @@ pub struct Service {
     /// names it: it keeps these alone, through its change of user.
     #[serde(default)]
     pub capabilities: Vec<String>,
-    /// The phone may do without this one. A program that is not on the
-    /// phone, or whose account this build does not have, is passed over
-    /// with a line in the log instead of stopping everything after it, and
-    /// one that does not become ready holds up nothing. For a service only
-    /// some builds carry, whose absence costs a feature rather than the
-    /// phone.
-    #[serde(default)]
-    pub optional: bool,
 }
 
 /// The kernel's capabilities, by the names init's capabilities lines give
@@ -616,7 +519,7 @@ impl DeviceConfig {
         for s in cfg.services.iter().filter(|s| s.oneshot) {
             let waits = s.ready_property.is_some() || s.ready_service.is_some() || s.ready_hardware_service.is_some();
             ensure!(
-                !waits && s.registers.is_empty() && s.description.is_none() && s.description_text.is_none(),
+                !waits && s.registers.is_empty(),
                 "[[service]] {}: a program run once is ready when it ends, and registers nothing",
                 s.path
             );
@@ -727,16 +630,16 @@ mod tests {
 
     #[test]
     fn nezha_gives_its_logd_the_libraries_its_recovery_leaves_out() {
-        let cfg = DeviceConfig::parse(include_str!("../../../devices/disabled/nezha.toml")).unwrap();
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/nezha.toml")).unwrap();
         let logd = cfg.logd.expect("the 17 Ultra's recovery leaves out what its logd loads");
         assert_eq!(logd.libraries, ["/mnt/system/system/lib64/libsysutils.so", "/mnt/system/system/lib64/libcap.so"]);
-        let ishtar = DeviceConfig::parse(include_str!("../../../devices/disabled/ishtar.toml")).unwrap();
+        let ishtar = DeviceConfig::parse(include_str!("../../../devices/ishtar.toml")).unwrap();
         assert_eq!(ishtar.logd, None, "the 13 Ultra's recovery carries both");
     }
 
     #[test]
     fn ishtar_clicks_with_a_waveform_its_driver_keeps() {
-        let cfg = DeviceConfig::parse(include_str!("../../../devices/disabled/ishtar.toml")).unwrap();
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/ishtar.toml")).unwrap();
         let haptics = cfg.haptics.expect("the 13 Ultra has a motor");
         assert_eq!((haptics.click, haptics.resonance.as_str()), (Some(0), "/sys/class/qcom-haptics/lra_frequency_hz"));
         assert_eq!(haptics.strength, Strength { lightest: 0.5, strongest: 1.0 });
@@ -782,7 +685,7 @@ mod tests {
 
     #[test]
     fn parses_nezha() {
-        let cfg = DeviceConfig::parse(include_str!("../../../devices/disabled/nezha.toml")).unwrap();
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/nezha.toml")).unwrap();
         assert_eq!(cfg.device.codename, "nezha");
         assert_eq!(cfg.device.os_version_prop, "ro.mi.os.version.incremental");
         let soc = cfg.device.soc.expect("nezha names its SoC");
@@ -798,59 +701,17 @@ mod tests {
         );
         assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into() }));
         assert_eq!(cfg.partitions.mounted, ["persist"], "the secure world keeps its own files there");
-        let paths: Vec<&str> = cfg.services.iter().map(|s| s.path.as_str()).collect();
-        assert_eq!(
-            paths,
-            [
-                "/vendor/bin/sh",
-                "/vendor/bin/qseecomd",
-                "/vendor/bin/hlosminkdaemon",
-                "/vendor/bin/hw/android.hardware.security.onekeymint-service-qti",
-                "/vendor/bin/hw/android.hardware.gatekeeper-rust-service-qti",
-                "/odm/bin/hw/android.hardware.secure_element-service-goodix",
-                "/odm/bin/hw/android.hardware.weaver-service",
-                "/vendor/bin/hw/android.hardware.boot-service.qti",
-            ]
-        );
-        for s in &cfg.services {
-            assert_eq!(s.libraries[..2], ["/system/lib64", "/vendor/lib64"], "{} loads the recovery's own libraries first", s.path);
-            assert_eq!(s.ready_hardware_service, None, "{} is of the newer kind", s.path);
-        }
-        let [post_boot, listeners, opener, keymint, gatekeeper, element, weaver, boot] = &cfg.services[..] else { panic!("eight programs") };
+        let [post_boot] = &cfg.services[..] else { panic!("one program: those that use the phone's keys are read from the phone's own partitions") };
+        assert_eq!(post_boot.path, "/vendor/bin/sh");
         assert!(post_boot.oneshot, "the system's own settings for after start are made once");
         assert_eq!(post_boot.args, ["/vendor/bin/init.kernel.post_boot.sh"]);
-        assert!(cfg.services[1..].iter().all(|s| !s.oneshot && s.args.is_empty()));
-        assert_eq!(listeners.ready_property.as_deref(), Some("vendor.sys.listeners.registered"));
-        assert_eq!((opener.ready_property.as_ref(), opener.ready_service.as_ref()), (None, None));
-        assert_eq!(keymint.ready_service.as_deref(), Some("android.hardware.security.keymint.IKeyMintDevice/default"));
-        assert!(keymint.registers.contains(&"android.hardware.security.secureclock.ISecureClock/default".to_string()));
-        assert!(keymint.registers.contains(&"android.hardware.security.sharedsecret.ISharedSecret/default".to_string()));
-        assert_eq!(gatekeeper.ready_service.as_deref(), Some("android.hardware.gatekeeper.IGatekeeper/default"));
-        assert_eq!(element.ready_service.as_deref(), Some("android.hardware.secure_element.ISecureElement/eSE2"));
-        assert_eq!(element.description.as_deref(), Some("/odm/etc/secure_element-service-goodixsp.xml"));
-        assert_eq!(weaver.ready_service.as_deref(), Some("android.hardware.weaver.IWeaver/default"));
-        assert_eq!(boot.ready_service.as_deref(), Some("android.hardware.boot.IBootControl/default"));
+        assert_eq!(post_boot.libraries, ["/system/lib64", "/vendor/lib64"], "it loads the recovery's own libraries first");
         let haptics = cfg.haptics.expect("the 17 Ultra has a motor");
         assert_eq!((haptics.click, haptics.resonance.as_str()), (None, "/sys/class/qcom-haptics/lra_frequency_hz"), "its click is made");
         assert_eq!(haptics.strength, Strength { lightest: 0.25, strongest: 0.75 }, "past three quarters the motor rattles");
         assert_eq!(cfg.backup.efs, ["modemst1", "modemst2", "fsg", "fsc", "persist"]);
         assert!(cfg.backup.data_skipped.contains(&"vendor/goodix".to_string()));
         assert!(cfg.wipe.logs.contains(&"/data/vendor/bsplog".to_string()));
-    }
-
-    #[test]
-    fn the_secure_element_of_each_build_runs_on_that_build_alone() {
-        let cfg = DeviceConfig::parse(include_str!("../../../devices/disabled/nezha.toml")).unwrap();
-        let runs = |props: &[(&str, &str)]| -> Vec<String> {
-            let props: HashMap<String, String> = props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            cfg.services.iter().filter(|s| s.runs_on(&props)).map(|s| s.path.clone()).collect()
-        };
-        let leica = runs(&[("ro.special_edition", "true")]);
-        assert_eq!(leica.len(), 8);
-        let plain = runs(&[]);
-        assert_eq!(plain.len(), 6);
-        assert!(!plain.iter().any(|p| p.starts_with("/odm/")), "the other builds' weaver cannot run in a recovery");
-        assert_eq!(runs(&[("ro.special_edition", "false")]), plain);
     }
 
     #[test]
@@ -874,7 +735,6 @@ mod tests {
         assert!(DeviceConfig::parse(&format!("{base}ready_property = \"vendor.a\"\n")).is_err());
         assert!(DeviceConfig::parse(&format!("{base}ready_service = \"a.IA/default\"\n")).is_err());
         assert!(DeviceConfig::parse(&format!("{base}registers = [\"a.IB/default\"]\n")).is_err());
-        assert!(DeviceConfig::parse(&format!("{base}description = \"/vendor/etc/a.xml\"\n")).is_err());
         let kept = DeviceConfig::parse("[device]\ncodename = \"x\"\n[[service]]\npath = \"/vendor/bin/a\"\n").unwrap();
         assert!(!kept.services[0].oneshot && kept.services[0].args.is_empty(), "a program is kept running unless it says otherwise");
     }
@@ -900,20 +760,14 @@ mod tests {
 
     #[test]
     fn each_phones_programs_run_as_their_init_scripts_run_them() {
-        let nezha = DeviceConfig::parse(include_str!("../../../devices/disabled/nezha.toml")).unwrap();
-        let ishtar = DeviceConfig::parse(include_str!("../../../devices/disabled/ishtar.toml")).unwrap();
+        let nezha = DeviceConfig::parse(include_str!("../../../devices/nezha.toml")).unwrap();
+        let ishtar = DeviceConfig::parse(include_str!("../../../devices/ishtar.toml")).unwrap();
         for s in nezha.services.iter().chain(&ishtar.services) {
             assert!(s.user.is_some(), "{} names the user its init script does", s.path);
         }
         let find = |cfg: &DeviceConfig, path: &str| cfg.services.iter().find(|s| s.path == path).cloned().expect("listed");
-        let element = find(&nezha, "/odm/bin/hw/android.hardware.secure_element-service-goodix");
-        assert_eq!((element.user.as_deref(), &element.groups[..]), (Some("system"), &["system".to_string()][..]), "its logs in the data partition are the system's");
-        let weaver = find(&nezha, "/odm/bin/hw/android.hardware.weaver-service");
-        assert_eq!(weaver.capabilities, ["WAKE_ALARM"]);
-        let listeners = find(&nezha, "/vendor/bin/qseecomd");
-        assert_eq!((listeners.user.as_deref(), &listeners.groups[..]), (Some("root"), &["root".to_string(), "drmrpc".to_string()][..]));
-        let opener = find(&nezha, "/vendor/bin/hlosminkdaemon");
-        assert_eq!(opener.capabilities, ["WAKE_ALARM", "BLOCK_SUSPEND"]);
+        let post_boot = find(&nezha, "/vendor/bin/sh");
+        assert_eq!((post_boot.user.as_deref(), &post_boot.groups[..]), (Some("root"), &["root", "system", "wakelock", "graphics"].map(str::to_string)[..]));
         let touch = find(&ishtar, "/odm/bin/touch_report");
         assert_eq!((touch.user.as_deref(), &touch.capabilities[..]), (Some("system"), &["SYS_NICE".to_string()][..]));
     }
@@ -921,27 +775,27 @@ mod tests {
     #[test]
     fn each_phone_names_the_stock_build_its_recovery_is_made_on() {
         for (text, version) in [
-            (include_str!("../../../devices/disabled/nezha.toml"), "OS4.0.4.0.XPACNXM"),
-            (include_str!("../../../devices/disabled/ishtar.toml"), "OS3.0.308.0.WMACNXM"),
-            (include_str!("../../../devices/disabled/pudding.toml"), "OS4.0.4.0.XPCCNXM"),
-            (include_str!("../../../devices/disabled/pandora.toml"), "OS4.0.4.0.XBLCNXM"),
-            (include_str!("../../../devices/disabled/popsicle.toml"), "OS4.0.4.0.XPBCNXM"),
-            (include_str!("../../../devices/disabled/myron.toml"), "OS4.0.4.0.XPMCNXM"),
-            (include_str!("../../../devices/disabled/songyuan.toml"), "OS4.0.4.0.XGNCNXM"),
-            (include_str!("../../../devices/disabled/athens.toml"), "OS4.0.4.0.XPICNXM"),
-            (include_str!("../../../devices/disabled/fuxi.toml"), "OS3.0.309.0.WMCCNXM"),
-            (include_str!("../../../devices/disabled/nuwa.toml"), "OS3.0.312.0.WMBCNXM"),
-            (include_str!("../../../devices/disabled/houji.toml"), "OS3.0.307.0.WNCCNXM"),
-            (include_str!("../../../devices/disabled/shennong.toml"), "OS3.0.309.0.WNBCNXM"),
+            (include_str!("../../../devices/nezha.toml"), "OS4.0.4.0.XPACNXM"),
+            (include_str!("../../../devices/ishtar.toml"), "OS3.0.308.0.WMACNXM"),
+            (include_str!("../../../devices/pudding.toml"), "OS4.0.4.0.XPCCNXM"),
+            (include_str!("../../../devices/pandora.toml"), "OS4.0.4.0.XBLCNXM"),
+            (include_str!("../../../devices/popsicle.toml"), "OS4.0.4.0.XPBCNXM"),
+            (include_str!("../../../devices/myron.toml"), "OS4.0.4.0.XPMCNXM"),
+            (include_str!("../../../devices/songyuan.toml"), "OS4.0.4.0.XGNCNXM"),
+            (include_str!("../../../devices/athens.toml"), "OS4.0.4.0.XPICNXM"),
+            (include_str!("../../../devices/fuxi.toml"), "OS3.0.309.0.WMCCNXM"),
+            (include_str!("../../../devices/nuwa.toml"), "OS3.0.312.0.WMBCNXM"),
+            (include_str!("../../../devices/houji.toml"), "OS3.0.307.0.WNCCNXM"),
+            (include_str!("../../../devices/shennong.toml"), "OS3.0.309.0.WNBCNXM"),
             (include_str!("../../../devices/aurora.toml"), "OS3.0.308.0.WNACNXM"),
-            (include_str!("../../../devices/disabled/dada.toml"), "OS3.0.307.0.WOCCNXM"),
-            (include_str!("../../../devices/disabled/haotian.toml"), "OS3.0.309.0.WOBCNXM"),
-            (include_str!("../../../devices/disabled/xuanyuan.toml"), "OS3.0.314.0.WOACNXM"),
-            (include_str!("../../../devices/disabled/byron.toml"), "OS3.0.310.0.WAFCNXM"),
-            (include_str!("../../../devices/disabled/zorn.toml"), "OS3.0.309.0.WOKCNXM"),
-            (include_str!("../../../devices/disabled/miro.toml"), "OS3.0.305.0.WOMCNXM"),
-            (include_str!("../../../devices/disabled/annibale.toml"), "OS3.0.307.0.WPKCNXM"),
-            (include_str!("../../../devices/disabled/warsaw.toml"), "OS3.0.309.0.WHPCNXM"),
+            (include_str!("../../../devices/dada.toml"), "OS3.0.307.0.WOCCNXM"),
+            (include_str!("../../../devices/haotian.toml"), "OS3.0.309.0.WOBCNXM"),
+            (include_str!("../../../devices/xuanyuan.toml"), "OS3.0.314.0.WOACNXM"),
+            (include_str!("../../../devices/byron.toml"), "OS3.0.310.0.WAFCNXM"),
+            (include_str!("../../../devices/zorn.toml"), "OS3.0.309.0.WOKCNXM"),
+            (include_str!("../../../devices/miro.toml"), "OS3.0.305.0.WOMCNXM"),
+            (include_str!("../../../devices/annibale.toml"), "OS3.0.307.0.WPKCNXM"),
+            (include_str!("../../../devices/warsaw.toml"), "OS3.0.309.0.WHPCNXM"),
         ] {
             let stock = DeviceConfig::parse(text).unwrap().stock.expect("a stock build to build on");
             assert_eq!(stock.version, version);
@@ -982,7 +836,7 @@ mod tests {
 
     #[test]
     fn parses_ishtar() {
-        let cfg = DeviceConfig::parse(include_str!("../../../devices/disabled/ishtar.toml")).unwrap();
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/ishtar.toml")).unwrap();
         assert_eq!(cfg.device.codename, "ishtar");
         assert_eq!((cfg.display.width, cfg.display.height, cfg.display.density), (1440, 3200, 560));
         assert_eq!(cfg.modules.load, ["fts_touch_spi"]);
@@ -995,42 +849,18 @@ mod tests {
         );
         assert!(cfg.firmware.is_none(), "its recovery mounts the modem partition itself");
         let paths: Vec<&str> = cfg.services.iter().map(|s| s.path.as_str()).collect();
-        assert_eq!(
-            paths,
-            [
-                "/odm/bin/touch_report",
-                "/odm/bin/touchsensor",
-                "/vendor/bin/qseecomd",
-                "/vendor/bin/hw/android.hardware.security.keymint-service-qti",
-                "/mnt/system_ext/bin/hwservicemanager",
-                "/vendor/bin/hw/android.hardware.gatekeeper@1.0-service-qti",
-                "/vendor/bin/hw/android.hardware.boot@1.2-service",
-            ]
-        );
+        assert_eq!(paths, ["/odm/bin/touch_report", "/odm/bin/touchsensor"], "the touch processing: the programs that use the phone's keys are read from the phone's own partitions");
         assert_eq!(cfg.services[1].libraries, ["/odm/lib64", "/system/lib64"]);
-        assert_eq!(cfg.services[0].ready_property, None, "the touch programs are ready as soon as they run");
-        assert_eq!(cfg.services[2].ready_property.as_deref(), Some("vendor.sys.listeners.registered"));
-        assert_eq!(
-            cfg.services[3].ready_service.as_deref(),
-            Some("android.hardware.security.keymint.IKeyMintDevice/default")
-        );
-        assert_eq!(
-            cfg.services[4].ready_property.as_deref(),
-            Some("hwservicemanager.ready"),
-            "the directory for the hardware services says so itself"
-        );
-        assert_eq!(
-            cfg.services[5].ready_hardware_service.as_deref(),
-            Some("android.hardware.gatekeeper@1.0::IGatekeeper/default")
-        );
-        assert_eq!(cfg.services[6].ready_hardware_service.as_deref(), Some("android.hardware.boot@1.2::IBootControl/default"));
+        for s in &cfg.services {
+            assert_eq!((s.ready_property.as_ref(), s.ready_service.as_ref(), s.ready_hardware_service.as_ref()), (None, None, None), "the touch programs are ready as soon as they run");
+        }
         assert_eq!(cfg.backup.efs, ["modemst1", "modemst2", "fsg", "fsc", "persist"]);
         assert!(cfg.backup.data_skipped.contains(&"vendor/tzstorage".to_string()));
     }
 
     #[test]
     fn the_phone_is_read_from_a_configuration_this_build_cannot_read_whole() {
-        assert_eq!(codename(include_str!("../../../devices/disabled/ishtar.toml")).unwrap(), "ishtar");
+        assert_eq!(codename(include_str!("../../../devices/ishtar.toml")).unwrap(), "ishtar");
         let later = "[device]\ncodename = \"x\"\nab = \"no longer a switch\"\n[display]\nwidth = \"wide\"\n[aurora]\nnew = 1\n";
         assert!(DeviceConfig::parse(later).is_err());
         assert_eq!(codename(later).unwrap(), "x");
@@ -1048,7 +878,7 @@ mod tests {
 
     #[test]
     fn the_phones_own_logs_are_folders_inside_the_data_partition() {
-        let cfg = DeviceConfig::parse(include_str!("../../../devices/disabled/ishtar.toml")).unwrap();
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/ishtar.toml")).unwrap();
         assert!(cfg.wipe.logs.contains(&"/data/vendor/diag".to_string()));
         assert!(DeviceConfig::parse("[device]\ncodename = \"x\"\n").unwrap().wipe.logs.is_empty(), "a phone may have none");
         for bad in ["/data", "/data/", "/metadata/logs", "data/log", "/data/../system"] {
@@ -1059,7 +889,7 @@ mod tests {
 
     #[test]
     fn ishtar_brings_its_wlan_up_from_its_own_partitions() {
-        let cfg = DeviceConfig::parse(include_str!("../../../devices/disabled/ishtar.toml")).unwrap();
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/ishtar.toml")).unwrap();
         let wlan = cfg.wlan.expect("the 13 Ultra's WLAN is described");
         assert_eq!(wlan.modules, ["qca_cld3_kiwi_v2"]);
         assert_eq!(wlan.writes, [Write { path: "/sys/kernel/cnss/fs_ready".into(), value: "1".into() }]);
@@ -1074,7 +904,7 @@ mod tests {
 
     #[test]
     fn nezha_brings_its_wlan_up_from_its_own_partitions() {
-        let cfg = DeviceConfig::parse(include_str!("../../../devices/disabled/nezha.toml")).unwrap();
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/nezha.toml")).unwrap();
         assert!(cfg.modules.sources.iter().any(|s| s == "system_dlkm"), "the kernel's own modules are a source");
         let wlan = cfg.wlan.expect("the 17 Ultra's WLAN is described");
         assert_eq!(wlan.modules, ["rfkill", "qca_cld3_peach_v2"]);
@@ -1108,13 +938,14 @@ mod tests {
 
     #[test]
     fn services_use_the_partitions_they_run_from() {
-        let cfg = DeviceConfig::parse(include_str!("../../../devices/disabled/ishtar.toml")).unwrap();
-        let [report, sensor, listeners, ..] = &cfg.services[..] else { panic!("ishtar keeps several programs running") };
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/ishtar.toml")).unwrap();
+        let [report, sensor] = &cfg.services[..] else { panic!("ishtar keeps its two touch programs running") };
         assert!(report.uses(Path::new("/odm")));
         assert!(sensor.uses(Path::new("/odm")));
         assert!(!report.uses(Path::new("/odm_dlkm")), "a longer name is another partition");
         assert!(!sensor.uses(Path::new("/mnt/system")), "its /system/lib64 is the recovery's own");
         assert!(!report.uses(Path::new("/vendor")));
-        assert!(listeners.uses(Path::new("/vendor")));
+        let nezha = DeviceConfig::parse(include_str!("../../../devices/nezha.toml")).unwrap();
+        assert!(nezha.services[0].uses(Path::new("/vendor")), "its shell and its libraries are the vendor partition's");
     }
 }

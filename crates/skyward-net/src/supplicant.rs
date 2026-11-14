@@ -142,12 +142,6 @@ pub fn unescape(text: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Bytes as hex digits, the way a value the supplicant takes as it is,
-/// with nothing to escape, is written.
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// What sets up a network with id `id` to join it: its name, how it is
 /// protected and its password. The name and a WPA3 password go as hex,
 /// which takes any byte; a WPA2 password goes in quotes, which the
@@ -156,20 +150,14 @@ pub fn hex(bytes: &[u8]) -> String {
 /// for by name.
 pub fn network_commands(id: u32, ssid: &[u8], security: Security, password: &str, hidden: bool) -> Result<Vec<String>> {
     let set = |name: &str, value: String| format!("SET_NETWORK {id} {name} {value}");
-    let mut commands = vec![set("ssid", hex(ssid))];
+    let mut commands = vec![set("ssid", hex::encode(ssid))];
     if hidden {
-        // The supplicant scans for the named network only, and takes its
-        // name as the supplicant takes every name: in hex.
-        commands.push(set("scan_ssid", hex(ssid)));
+        commands.push(set("scan_ssid", "1".into()));
     }
     let psk = || -> Result<String> {
-        // The supplicant reads the password as a quoted string and takes a
-        // quote inside it as the end of the password unless it is escaped
-        // with a backslash -- which is the one escape it knows. A password
-        // is not told to be ASCII: the phone has kept the one it had.
-        ensure!((8..=63).contains(&password.len()), "a WPA password is 8 to 63 characters long");
-        let escaped = password.replace('"', "\\\"");
-        Ok(format!("\"{escaped}\""))
+        ensure!((8..=63).contains(&password.len()), "a WPA2 password is 8 to 63 characters long");
+        ensure!(password.bytes().all(|b| (32..=126).contains(&b)), "a WPA2 password is printable ASCII");
+        Ok(format!("\"{password}\""))
     };
     match security {
         Security::Open => commands.push(set("key_mgmt", "NONE".into())),
@@ -184,13 +172,13 @@ pub fn network_commands(id: u32, ssid: &[u8], security: Security, password: &str
         Security::Sae => {
             ensure!(!password.is_empty(), "a WPA3 password is not empty");
             commands.push(set("key_mgmt", "SAE".into()));
-            commands.push(set("sae_password", hex(password.as_bytes())));
+            commands.push(set("sae_password", hex::encode(password)));
             commands.push(set("ieee80211w", "2".into()));
         }
         Security::PskSae => {
             commands.push(set("key_mgmt", "WPA-PSK WPA-PSK-SHA256 SAE".into()));
             commands.push(set("psk", psk()?));
-            commands.push(set("sae_password", hex(password.as_bytes())));
+            commands.push(set("sae_password", hex::encode(password)));
             commands.push(set("ieee80211w", "1".into()));
         }
         Security::Wep | Security::Enterprise => bail!("the recovery does not join a network protected so"),
@@ -402,7 +390,6 @@ mod tests {
         assert_eq!(unescape(r"\x00\xff").unwrap(), [0, 255]);
         assert!(unescape(r"\x4").is_err());
         assert!(unescape(r"\q").is_err());
-        assert_eq!(hex(b"ab\x00"), "616200");
     }
 
     #[test]
@@ -410,7 +397,7 @@ mod tests {
         let wpa2 = network_commands(0, "Skyward客厅".as_bytes(), Security::Psk, "pass\"word", false).unwrap();
         assert_eq!(
             wpa2,
-            ["SET_NETWORK 0 ssid 536b7977617264e5aea2e58e85", "SET_NETWORK 0 key_mgmt WPA-PSK WPA-PSK-SHA256", "SET_NETWORK 0 psk \"pass\\\"word\""]
+            ["SET_NETWORK 0 ssid 536b7977617264e5aea2e58e85", "SET_NETWORK 0 key_mgmt WPA-PSK WPA-PSK-SHA256", "SET_NETWORK 0 psk \"pass\"word\""]
         );
         let wpa3 = network_commands(2, b"Skyward",Security::Sae, "short", false).unwrap();
         assert_eq!(wpa3[1..], ["SET_NETWORK 2 key_mgmt SAE", "SET_NETWORK 2 sae_password 73686f7274", "SET_NETWORK 2 ieee80211w 2"]);
@@ -419,10 +406,10 @@ mod tests {
         assert!(both.contains(&"SET_NETWORK 1 sae_password 3132333435363738".to_string()));
         assert_eq!(network_commands(0, b"Skyward",Security::Open, "", false).unwrap()[1], "SET_NETWORK 0 key_mgmt NONE");
         assert!(network_commands(0, b"Skyward",Security::Psk, "1234567", false).is_err(), "a WPA2 password is 8 characters at least");
-        assert!(network_commands(0, b"Skyward",Security::Psk, "密码密码密码密码", false).is_ok(), "a password need not be ASCII");
+        assert!(network_commands(0, b"Skyward",Security::Psk, "密码密码密码密码", false).is_err(), "a WPA2 password is ASCII");
         assert!(network_commands(0, b"Skyward",Security::Wep, "12345", false).is_err());
         let hidden = network_commands(3, b"Skyward", Security::Open, "", true).unwrap();
-        assert_eq!(hidden, ["SET_NETWORK 3 ssid 536b7977617264", "SET_NETWORK 3 scan_ssid 536b7977617264", "SET_NETWORK 3 key_mgmt NONE"]);
+        assert_eq!(hidden, ["SET_NETWORK 3 ssid 536b7977617264", "SET_NETWORK 3 scan_ssid 1", "SET_NETWORK 3 key_mgmt NONE"]);
     }
 
     #[test]

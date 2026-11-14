@@ -6,19 +6,17 @@ use skyward_net::download::{Failure as DownloadFailure, Progress};
 use skyward_net::github::{Build, Newest};
 use skyward_net::reach::Reach;
 use skyward_net::release::{Release, Unanswered};
-use skyward_net::web::{Block as WebBlock, Page as WebPage, Style};
 use skyward_net::supplicant::Security;
 use skyward_net::wlan::{Bands, Joined, Link, Network, Power, Stage as Joining, Traffic, Wlan};
 use skyward_systems::{Named, Other, Overview, Who};
 use skyward_ui::app::{
-    Action, Adding, App, Asked, Asking, BackupAt, BackupEnd, BackupEntry, BackupJob, BackupRefusal, BrowserFull, BrowserView, Choice, Clip, Damage, Data, DownloadEnd,
+    Action, Adding, App, Asked, BackupAt, BackupEnd, BackupEntry, BackupJob, BackupRefusal, Choice, Clip, Damage, Data, DownloadEnd,
     DownloadJob, EraseStop, Field, FileKind, FileOp, FileRow, FileTask, FsAction, FsRow, Have, Held, Install, ItemEnd, JobEnd, Key, Keys,
-    MountFailure, MountRow, Part, PartKind, PartStop, Pick, Place, Screen, SkywardEnd, SkywardJob, SkywardStage, Source, Starter,
-    SystemChoice, SystemsWork, TermEnd, Touch, UsbDrive, UsbLink, SCREEN_OFF,
+    MountFailure, MountRow, Part, PartKind, PartStop, Pick, Place, Screen, SkywardEnd, SkywardJob, SkywardStage, Source, SystemChoice,
+    SystemsWork, TermEnd, Touch, UsbDrive, UsbLink, SCREEN_OFF,
 };
 use skyward_ui::widgets::{self, Bar, Bolt, Cap, Layer};
 use skyward_ui::{editor, fmt, pages, Canvas, Ctx, Fonts, Lang, Theme};
-use skyward_vab::avb::{Change as AvbChange, Reading as AvbReading};
 use skyward_vab::{BootSlots, FailureCode, Hold, Slot, SnapshotState, Standing};
 use std::fs::File;
 use std::io::BufWriter;
@@ -38,15 +36,15 @@ fn lang() -> Lang {
 }
 
 /// What a shell in the recovery writes for a few commands, colours and all.
-const SHELL_SAMPLE: &[u8] = b"nuwa:/ # getprop ro.product.device\r\nnuwa\r\n\
-nuwa:/ # ls --color=always /\r\n\
+const SHELL_SAMPLE: &[u8] = b"ishtar:/ # getprop ro.product.device\r\nishtar\r\n\
+ishtar:/ # ls --color=always /\r\n\
 \x1b[1;34macct\x1b[0m  \x1b[1;34mapex\x1b[0m  \x1b[1;36mbin\x1b[0m  \x1b[1;34mconfig\x1b[0m  \x1b[1;34mdata\x1b[0m  \x1b[1;34mdev\x1b[0m\r\n\
 \x1b[1;36metc\x1b[0m  \x1b[1;32minit\x1b[0m  \x1b[1;34mmetadata\x1b[0m  \x1b[1;34mmnt\x1b[0m  \x1b[1;34modm\x1b[0m\r\n\
 \x1b[1;34mproc\x1b[0m  \x1b[1;34msys\x1b[0m  \x1b[1;34msystem\x1b[0m  \x1b[1;34mtmp\x1b[0m  \x1b[1;34mvendor\x1b[0m\r\n\
-nuwa:/ # df -h /metadata\r\n\
+ishtar:/ # df -h /metadata\r\n\
 Filesystem      Size Used Avail Use% Mounted on\r\n\
 /dev/block/sda9  59M 7.0M   52M  12% /metadata\r\n\
-nuwa:/ # ";
+ishtar:/ # ";
 
 /// A script as the editor shows it: an indented line, a comment in
 /// Chinese, and lines long enough to wrap.
@@ -112,6 +110,7 @@ fn two_systems() -> Overview {
         other: Some(Other { id: "ubuntu-touch".into(), name: "Ubuntu Touch".into(), version: "24.04-1.x".into(), size: 32_000_000_000 }),
         other_starts: false,
         changed: false,
+        held: skyward_systems::Held::Recorded,
     }
 }
 
@@ -122,15 +121,6 @@ type Shot<'a> = (&'a str, Screen, bool, &'a DeviceInfo, Data, &'a [usize]);
 /// File name, dark theme, readings, a mount that failed, and the partitions
 /// left unmounted.
 type MountShot<'a> = (&'a str, bool, &'a DeviceInfo, Option<MountFailure>, &'a [&'a str]);
-
-/// The vbmeta blocks a phone keeps, as the AVB page shows them: checking
-/// with `off` false, and with both checks turned off.
-fn avb_blocks(off: bool) -> Vec<AvbReading> {
-    [("vbmeta", 1u32), ("vbmeta_system", 1u32)]
-        .into_iter()
-        .map(|(name, algorithm)| AvbReading { name: name.to_string(), flags: if off { 3 } else { 0 }, algorithm })
-        .collect()
-}
 
 /// File name, page, dark theme, and what to set before the page is drawn.
 type PageShot<'a> = (&'a str, Screen, bool, &'a dyn Fn(&mut App));
@@ -153,7 +143,7 @@ fn main() -> Result<()> {
         eprintln!("axis {tag}: {min}..{max} (default {def})");
     }
 
-    let cfg = DeviceConfig::load(root.join("devices/aurora.toml"))?;
+    let cfg = DeviceConfig::load(root.join("devices/nezha.toml"))?;
     let (w, h) = (cfg.display.width, cfg.display.height);
     let ppd = cfg.display.density as f32 / 160.0;
     let light = Theme::light(w, h, ppd);
@@ -172,7 +162,7 @@ fn main() -> Result<()> {
         _ => {}
     }
 
-    let info = nuwa(&cfg);
+    let info = nezha(&cfg);
     let pending = DeviceInfo { snapshot: SnapshotState::Snapshotted, ..info.clone() };
     let pattern = Data::Locked { user: 0, keys: Keys::Pattern, checking: false };
     // Whole pages, the way a long screenshot shows them. The About page's
@@ -255,7 +245,7 @@ fn main() -> Result<()> {
         (
             "38-sideload-refused",
             false,
-            Install::Finished { outcome: Outcome::Refused(Refusal::OtherDevice("nuwa".into())), damage: None },
+            Install::Finished { outcome: Outcome::Refused(Refusal::OtherDevice("ishtar".into())), damage: None },
         ),
         (
             "39-sideload-failed",
@@ -326,8 +316,8 @@ fn main() -> Result<()> {
         BackupEntry { place, name: fmt::stamp(made, 0), held: Ok(held) }
     };
     let backups = vec![
-        made(Place::Storage, 1_792_348_260, 6_214_000_000, [true, true, false, true, false], "OS4.0.4.0.XPACNXM"),
-        made(Place::UsbDrive, 1_791_830_000, 141_000_000, [true, false, false, false, false], "OS4.0.3.0.XPACNXM"),
+        made(Place::Storage, 1_792_348_260, 6_214_000_000, [true, true, false, true], "OS4.0.4.0.XPACNXM"),
+        made(Place::UsbDrive, 1_791_830_000, 141_000_000, [true, false, false, false], "OS4.0.3.0.XPACNXM"),
         BackupEntry {
             place: Place::Storage,
             name: "20261020-221500".into(),
@@ -368,7 +358,7 @@ fn main() -> Result<()> {
         app.set_files("/sdcard/Download".into(), Ok(sample_download()), LISTED);
         app.state.file = sample_download().into_iter().find(|e| e.name == name);
     };
-    let ota = "/sdcard/Download/OTA_nuwa_OS3.0.305.0.WMACNXM_20260412_full_package_signed_for_recovery_install.zip";
+    let ota = "/sdcard/Download/OTA_ishtar_OS3.0.305.0.WMACNXM_20260412_full_package_signed_for_recovery_install.zip";
     let copying = || FileTask::Copy { path: ota.into(), into: "/sdcard/Skyward".into() };
     let from_storage = |app: &mut App, install: Install| {
         app.state.source = Source::File(Place::Storage);
@@ -380,7 +370,7 @@ fn main() -> Result<()> {
         let mut lines = vec![
             " ",
             "******************************",
-            "  Example ROM 2.1 for nuwa",
+            "  Example ROM 2.1 for ishtar",
             "******************************",
             " ",
             "- 正在检查设备型号",
@@ -398,14 +388,14 @@ fn main() -> Result<()> {
     };
     let script = |app: &mut App, install: Install, failed: bool| {
         from_storage(app, install);
-        app.state.package_name = Some("ExampleROM-2.1-nuwa.zip".into());
+        app.state.package_name = Some("ExampleROM-2.1-ishtar.zip".into());
         app.state.script_output = said(failed);
     };
     let usb_page = Screen::Choose(Place::UsbDrive);
     let adding = |app: &mut App, name: &str, security: Security, field: Field, choosing: bool| {
         app.state.adding = Some(Adding { name: name.into(), security, field, choosing });
     };
-    let pages: [PageShot; 190] = [
+    let pages: [PageShot; 178] = [
         ("11-install-light-locked", Screen::Install, false, &|app| {
             app.state.data = Data::Locked { user: 0, keys: Keys::Digits, checking: false };
         }),
@@ -421,7 +411,7 @@ fn main() -> Result<()> {
         ("19-choose-usb-light", usb_page, false, &|app| {
             app.set_usb_drive(Some(UsbDrive::Shown));
             let made = 1_790_380_800;
-            let rows = vec![folder("ROMs", 4, made), file("boot.img", 100_663_296, made), file("nuwa-ota-OS3.0.306.0.WMACNXM.zip", 7_103_043_868, made)];
+            let rows = vec![folder("ROMs", 4, made), file("boot.img", 100_663_296, made), file("ishtar-ota-OS3.0.306.0.WMACNXM.zip", 7_103_043_868, made)];
             app.set_place(Place::UsbDrive, String::new(), Ok(rows), LISTED);
         }),
         ("20-install-usb-checking", Screen::Installing, false, &|app| {
@@ -445,7 +435,7 @@ fn main() -> Result<()> {
             from_storage(app, Install::Finished { outcome: Outcome::Refused(Refusal::Unknown), damage: None })
         }),
         ("20-install-storage-failed", Screen::Installing, false, &|app| {
-            let gone = "read /sdcard/Download/OTA_nuwa_OS3.0.305.0.WMACNXM.zip: Input/output error (os error 5)";
+            let gone = "read /sdcard/Download/OTA_ishtar_OS3.0.305.0.WMACNXM.zip: Input/output error (os error 5)";
             from_storage(app, Install::Finished { outcome: Outcome::Failed(Failure::Unreadable(gone.into())), damage: Some(Damage::System) })
         }),
         ("20-install-script-confirming", Screen::Installing, false, &|app| {
@@ -508,29 +498,17 @@ fn main() -> Result<()> {
         ("46-restore-light-none", Screen::Restore, false, &|_| {}),
         ("47-restore-light", Screen::Restore, false, &|app| app.set_backups(backups.clone())),
         ("48-restore-backup-light", Screen::RestoreBackup, false, &|app| {
-            app.state.restore = Some((backups[0].clone(), [true, false, false, true, false]));
+            app.state.restore = Some((backups[0].clone(), [true, false, false, true]));
         }),
         ("48-restore-backup-dark-deleting", Screen::RestoreBackup, true, &|app| {
-            app.state.restore = Some((backups[0].clone(), [true, true, false, true, false]));
+            app.state.restore = Some((backups[0].clone(), [true, true, false, true]));
             app.state.asking_delete = true;
         }),
         ("48-restore-backup-light-other-version", Screen::RestoreBackup, false, &|app| {
-            app.state.restore = Some((backups[1].clone(), [true, false, false, false, false]));
+            app.state.restore = Some((backups[1].clone(), [true, false, false, false]));
         }),
         ("48-restore-backup-light-unreadable", Screen::RestoreBackup, false, &|app| {
-            app.state.restore = Some((backups[2].clone(), [false; 5]));
-        }),
-        ("48-restore-backup-light-chain-only", Screen::RestoreBackup, false, &|app| {
-            let held = Held {
-                made: 1_792_372_070,
-                size: 230_162_432,
-                parts: [false, false, false, false, true],
-                device: cfg.device.codename.clone(),
-                system: Some("OS3.0.308.0.WNACNXM".into()),
-                slot: Some(Slot::B),
-            };
-            let entry = BackupEntry { place: Place::Storage, name: "20261103-234430".into(), held: Ok(held) };
-            app.state.restore = Some((entry, [false; 5]));
+            app.state.restore = Some((backups[2].clone(), [false; 4]));
         }),
         ("100-backup-job-light-measuring", Screen::BackupJob, false, &|app| app.state.backup_job = job(false, Vec::new(), None, None)),
         ("101-backup-job-light", Screen::BackupJob, false, &|app| {
@@ -564,30 +542,6 @@ fn main() -> Result<()> {
             app.state.backup_job = job(true, Vec::new(), None, Some(BackupEnd::Refused(BackupRefusal::DataReset)))
         }),
         ("49-advanced-light", Screen::Advanced, false, &|_| {}),
-        ("49-avb-light", Screen::Avb, false, &|app| app.set_avb(Ok(avb_blocks(false)), Some("enforcing".into()))),
-        ("49-avb-dark-off", Screen::Avb, true, &|app| {
-            app.set_avb(Ok(avb_blocks(true)), Some("enforcing".into()));
-            app.state.avb_result = Some(Ok(vec![
-                AvbChange { name: "vbmeta".into(), before: 0, after: 3, kept: Some("/mnt/logfs/skyward/avb/vbmeta_b-0x00000000-1793681979.img".into()) },
-                AvbChange { name: "vbmeta_system".into(), before: 0, after: 3, kept: Some("/mnt/logfs/skyward/avb/vbmeta_system_b-0x00000000-1793681979.img".into()) },
-            ]));
-        }),
-        ("49-avb-light-nowhere-to-keep", Screen::Avb, false, &|app| {
-            app.set_avb(Ok(avb_blocks(true)), Some("enforcing".into()));
-            app.state.avb_result = Some(Err(
-                "no folder would keep a copy of the blocks, so nothing was changed (/mnt/logfs/skyward/avb: read-only file system; /sdcard/Skyward/avb: the data partition is not open)"
-                    .into(),
-            ));
-        }),
-        ("49-bcb-light", Screen::Bcb, false, &|app| {
-            app.set_starter(Ok(Starter {
-                command: "boot-recovery".into(),
-                asks: Asking::PromptWipeData,
-                reason: Some("fs_mgr_mount_all".into()),
-                args: vec!["--prompt_and_wipe_data".into(), "--reason=fs_mgr_mount_all".into()],
-            }))
-        }),
-        ("49-bcb-dark-empty", Screen::Bcb, true, &|app| app.set_starter(Ok(Starter::default()))),
         ("50-files-light", Screen::Files, false, &|app| app.set_files("/".into(), Ok(sample_root()), LISTED)),
         ("51-files-dark", Screen::Files, true, &|app| app.set_files("/".into(), Ok(sample_root()), LISTED)),
         ("52-file-info-light", Screen::FileInfo, false, &|app| app.state.file = sample_root().into_iter().find(|e| e.name == "init.environ.rc")),
@@ -735,7 +689,7 @@ fn main() -> Result<()> {
             app.part_at(1);
         }),
         ("168-installing-light-asked-locked", Screen::Home, false, &|app| {
-            app.start_asked(false, "/sdcard/Download/nuwa-ota_full-OS3.0.308.0.WMACNXM-user-16.0.zip".into());
+            app.start_asked(false, "/sdcard/Download/ishtar-ota_full-OS3.0.308.0.WMACNXM-user-16.0.zip".into());
             app.asked_locked(0, 0);
         }),
         ("169-installing-dark-asked-opening", Screen::Home, true, &|app| {
@@ -783,9 +737,9 @@ fn main() -> Result<()> {
             app.part_work_ended(Ok(()), 0);
         }),
         ("178-file-info-light-package", Screen::FileInfo, false, &|app| {
-            in_download(app, "OTA_nuwa_OS3.0.305.0.WMACNXM_20260412_full_package_signed_for_recovery_install.zip")
+            in_download(app, "OTA_ishtar_OS3.0.305.0.WMACNXM_20260412_full_package_signed_for_recovery_install.zip")
         }),
-        ("179-file-info-dark-image", Screen::FileInfo, true, &|app| in_download(app, "skyward-recovery-nuwa.img")),
+        ("179-file-info-dark-image", Screen::FileInfo, true, &|app| in_download(app, "skyward-recovery-ishtar.img")),
         ("180-install-opened-light-checking", Screen::Installing, false, &|app| {
             app.state.source = Source::Opened { drive: false };
             app.state.install = Install::Checking { size: 7_014_220_000, stage: None };
@@ -895,7 +849,7 @@ fn main() -> Result<()> {
         ("75-terminal-light-ended", Screen::Terminal, false, &|app| {
             let (rows, cols) = app.term_size(&fonts);
             app.term_started(rows, cols);
-            app.term_output(b"nuwa:/ # exit\r\n");
+            app.term_output(b"ishtar:/ # exit\r\n");
             app.term_ended(TermEnd::Exited(0));
         }),
         ("55-language-light", Screen::Language, false, &|_| {}),
@@ -1018,19 +972,6 @@ fn main() -> Result<()> {
         ("90-decrypt-dark-failed", Screen::Decrypt, true, &|app| {
             app.data_failed("android.hardware.security.keymint.IKeyMintDevice/default is not running".into())
         }),
-        // The shape a real failure takes: the reason, then one line for each
-        // service that would not stay up. Long enough that a page drawn one
-        // screen tall would lose its end.
-        ("90b-decrypt-light-failed-long", Screen::Decrypt, false, &|app| {
-            app.data_failed(concat!(
-                "none of user 0's 2 blobs opened: android.hardware.weaver.IWeaver/default is not running; ",
-                "the phone's weaver has to be started first\n",
-                "— /vendor/bin/hw/android.hardware.weaver-service.nxp: CANNOT LINK EXECUTABLE ",
-                "\"/vendor/bin/hw/android.hardware.weaver-service.nxp\": library \"libnxp_weaver.so\" not found\n",
-                "— /vendor/bin/hw/android.hardware.weaver-service.nxp: pid 1234 ended: exit status: 1"
-            )
-            .into())
-        }),
         ("91-wipe-light-all", Screen::Wipe, false, &|app| app.state.wipe[0] = true),
         ("92-wipe-dark-parts-cache", Screen::Wipe, true, &|app| {
             app.state.cache_partition = true;
@@ -1058,43 +999,6 @@ fn main() -> Result<()> {
         ("99-erase-dark-locked", Screen::Erase, true, &|app| {
             app.erase_started(false, false, vec![Part::AppData, Part::AppCaches]);
             app.erase_ended(Err(EraseStop::Locked(vec![0, 999])), 0);
-        }),
-        ("182-browser-home-light", Screen::Browser, false, &|app| {
-            online(app);
-            app.state.browser.history = vec![
-                "https://github.com/kirklin/skyward/releases".into(),
-                "https://download.lineageos.org/devices/aurora".into(),
-                "https://www.bing.com/search?format=rss&q=skyward+recovery".into(),
-            ];
-            app.state.browser.at = 2;
-        }),
-        ("183-browser-read-light", Screen::Browser, false, &|app| {
-            online(app);
-            let page = browser_page();
-            let b = &mut app.state.browser;
-            b.url = page.url.clone();
-            b.address = page.url.clone();
-            b.history = vec![page.url.clone()];
-            b.at = 0;
-            b.view = BrowserView::Page(page);
-        }),
-        ("184-browser-read-dark", Screen::Browser, true, &|app| {
-            online(app);
-            let page = browser_page();
-            let b = &mut app.state.browser;
-            b.url = page.url.clone();
-            b.address = page.url.clone();
-            b.history = vec![page.url.clone()];
-            b.at = 0;
-            b.view = BrowserView::Page(page);
-        }),
-        ("186-browser-address-light", Screen::BrowserAddress, false, &|app| {
-            online(app);
-            app.state.browser.address = "https://github.com/guobaoji-122/skyward-for-aurora".into();
-        }),
-        ("187-browser-full-light", Screen::BrowserFull, false, &|app| {
-            online(app);
-            app.state.browser.full = BrowserFull::Absent("插件尚未安装".into());
         }),
     ];
     for (name, screen, dark, set) in pages {
@@ -1428,9 +1332,9 @@ fn sample_download() -> Vec<FileRow> {
         folder("安装包", 68, this_year),
         file("1d9bf122-130e-4db7-ae55-460c84819f0e.pdf", 1_090_000, this_year),
         file("2021一带一路暨金砖大赛之物联网技术及其在智慧城市与工业互联网领域的应用创新赛表彰文件.pdf", 634_960, earlier),
-        file("OTA_nuwa_OS3.0.305.0.WMACNXM_20260412_full_package_signed_for_recovery_install.zip", 7_014_220_000, this_year),
+        file("OTA_ishtar_OS3.0.305.0.WMACNXM_20260412_full_package_signed_for_recovery_install.zip", 7_014_220_000, this_year),
         file("README.txt", 900, today),
-        file("skyward-recovery-nuwa.img", 104_857_600, today),
+        file("skyward-recovery-ishtar.img", 104_857_600, today),
     ]
 }
 
@@ -1441,7 +1345,7 @@ fn sample_types() -> Vec<FileRow> {
     let mut rows: Vec<FileRow> = [
         ("boot.img", 100_663_296),
         ("IMG_20261021_143005.jpg", 4_812_000),
-        ("update-nuwa.zip", 1_402_000_000),
+        ("update-ishtar.zip", 1_402_000_000),
         ("app-release.apk", 11_300_000),
         ("recovery.log", 486_000),
         ("VID_20261020_201512.mp4", 182_400_000),
@@ -1544,13 +1448,13 @@ fn router_link() -> Link {
     }
 }
 
-/// A newer system than the 13 Pro's own, as the update server tells of
+/// A newer system than the 17 Ultra's own, as the update server tells of
 /// one.
 fn newest() -> Release {
     Release {
-        version: "OS4.0.25.0.XEOCNXM".into(),
-        name: "nuwa-ota_full-OS4.0.25.0.XEOCNXM-user-17.0-3f2a9c81d4.zip".into(),
-        urls: vec!["https://ultimateota.d.miui.com/OS4.0.25.0.XEOCNXM/nuwa-ota_full-OS4.0.25.0.XEOCNXM-user-17.0-3f2a9c81d4.zip".into()],
+        version: "OS4.0.6.0.XPACNXM".into(),
+        name: "nezha-ota_full-OS4.0.6.0.XPACNXM-user-17.0-3f2a9c81d4.zip".into(),
+        urls: vec!["https://ultimateota.d.miui.com/OS4.0.6.0.XPACNXM/nezha-ota_full-OS4.0.6.0.XPACNXM-user-17.0-3f2a9c81d4.zip".into()],
         md5: "3f2a9c81d4e05b7a6c1e9d2f8b7a6c5d".into(),
         size: "7.1G".into(),
         length: Some(7_572_375_802),
@@ -1561,51 +1465,6 @@ fn newest() -> Release {
 fn online(app: &mut App) {
     app.state.update_server = true;
     app.state.wlan = Some(joined(Joining::Connected(router_link())));
-}
-
-/// A page as the browser reads it: a release note with a download link.
-fn browser_page() -> WebPage {
-    let url = "https://github.com/guobaoji-122/skyward-for-aurora/releases/tag/aurora-v0.3.4";
-    WebPage {
-        url: url.into(),
-        title: "Skyward 0.3.4 · 小米 14 Ultra (aurora)".into(),
-        site: "github.com".into(),
-        description: Some("A recovery written in Rust. 本次加入图片、基础 CSS、表单与 Cookie。".into()),
-        blocks: vec![
-            WebBlock::Heading { level: 2, text: "更新内容".into(), style: Style { bold: true, ..Style::default() } },
-            WebBlock::Bullet { text: "浏览器支持图片、基础 CSS、表单和 Cookie。".into(), style: Style::default() },
-            WebBlock::Bullet { text: "下载 zip 和镜像后可以直接安装。".into(), style: Style::default() },
-            WebBlock::Heading { level: 2, text: "下载".into(), style: Style::default() },
-            WebBlock::Paragraph { text: "完整镜像，解压后按下面的命令刷入 recovery 分区。".into(), style: Style::default() },
-            WebBlock::Link {
-                label: "skyward-aurora-v0.3.4-OS3.0.308.0.WNACNXM.zip".into(),
-                url: "https://github.com/guobaoji-122/skyward-for-aurora/releases".into(),
-                download: true,
-                style: Style::default(),
-            },
-            WebBlock::Heading { level: 2, text: "刷入".into(), style: Style::default() },
-            WebBlock::Paragraph {
-                text: "解锁 bootloader 后，在电脑上执行：".into(),
-                style: Style { color: Some(0xcc3333), ..Style::default() },
-            },
-            WebBlock::Code {
-                text: "fastboot flash recovery skyward-aurora-v0.3.4.img\nfastboot reboot recovery".into(),
-                style: Style::default(),
-            },
-            WebBlock::Quote { text: "刷入 recovery 不会清除用户数据，但仍建议先备份。".into(), style: Style::default() },
-            WebBlock::Image {
-                alt: "Skyward 主界面".into(),
-                url: "https://example.com/skyward.png".into(),
-                data: None,
-                width: 0,
-                height: 0,
-                style: Style::default(),
-            },
-        ],
-        forms: Vec::new(),
-        cookies: Vec::new(),
-        truncated: false,
-    }
 }
 
 /// A newer release of Skyward than the one running, as GitHub tells of it,
@@ -1673,29 +1532,29 @@ fn whole_page(app: &mut App, f: &Fonts, info: &DeviceInfo) -> Canvas {
 
 /// Xiaomi 17 Ultra by Leica as `skyward info` read it on 2026-10-18 (the
 /// config supplies the SoC name, panel and screen size).
-fn nuwa(cfg: &DeviceConfig) -> DeviceInfo {
+fn nezha(cfg: &DeviceConfig) -> DeviceInfo {
     DeviceInfo {
-        model: "Xiaomi 13 Pro".into(),
+        model: "Xiaomi 17 Ultra by Leica".into(),
         codename: cfg.device.codename.clone(),
         soc: cfg.device.soc.clone(),
-        cpu: Cpu { cores: 8, max_khz: Some(3_187_200) },
-        ram_kib: 11_932_672,
+        cpu: Cpu { cores: 8, max_khz: Some(4_608_000) },
+        ram_kib: 15_472_464,
         panel: Some((cfg.display.width, cfg.display.height)),
         screen: cfg.display.diagonal,
-        os_version: Some("OS4.0.24.0.XEOCNXM".into()),
+        os_version: Some("OS4.0.4.0.XPACNXM".into()),
         android: Some("17".into()),
         locale: Some("zh-CN".into()),
         security_patch: Some(PatchLevel { year: 2026, month: 10, day: 1 }),
-        kernel: "5.15.178-android13-8-g9c4d2e71f0a2-ab10502974-4k".into(),
-        storage: Storage { total: 256_087_425_024, free: Some(231_500_000_000) },
+        kernel: "6.12.69-android16-6-g43b5ab7e247d-abogki561813157-4k".into(),
+        storage: Storage { total: 1_039_535_157_248, free: Some(620_652_802_048) },
         battery: Some(Battery {
             level: 95,
             charge: Charge::Charging,
             temp: Some(350),
             health: Some("Good".into()),
             cycles: Some(300),
-            design: Some(4_820_000),
-            full: Some(4_655_000),
+            design: Some(6_800_000),
+            full: Some(6_543_000),
             voltage: Some(4_442_000),
             // The recovery has no fast charging handshake with the charger.
             quick: false,
