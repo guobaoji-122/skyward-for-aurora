@@ -16,6 +16,7 @@ pub mod sleep;
 pub mod uevent;
 pub mod ueventd;
 pub mod usb;
+pub mod worker;
 
 /// A system property, or `None` when it is unset.
 #[cfg(target_os = "android")]
@@ -55,7 +56,7 @@ fn yes_or_no(value: Option<&str>) -> Option<bool> {
 #[cfg(target_os = "android")]
 pub fn props(prefix: &str) -> Vec<(String, String)> {
     use std::ffi::{c_char, c_void, CStr};
-    extern "C" {
+    unsafe extern "C" {
         fn __system_property_read_callback(
             pi: *const libc::prop_info,
             callback: unsafe extern "C" fn(cookie: *mut c_void, name: *const c_char, value: *const c_char, serial: u32),
@@ -200,6 +201,8 @@ const LOG_DISK_BUDGET: u64 = 2_500_000;
 
 /// The file [`kmsg`] writes its lines to as well, once [`keep_log`] opened
 /// it.
+static RUNS_AGAIN: OnceLock<bool> = OnceLock::new();
+
 static KEPT: OnceLock<Mutex<File>> = OnceLock::new();
 
 /// The lasting copy's file, opened the first time the data partition is
@@ -229,8 +232,10 @@ static LONG_STOPPED: AtomicBool = AtomicBool::new(false);
 /// Keep every line [`kmsg`] writes from now on in the file at `path` as
 /// well, after what an earlier run left there.
 pub fn keep_log(path: &Path) -> Result<()> {
+    let again = path.exists();
     let file = OpenOptions::new().create(true).append(true).open(path).with_context(|| format!("open {}", path.display()))?;
-    KEPT.set(Mutex::new(file)).map_err(|_| anyhow!("the log is kept in a file already"))
+    KEPT.set(Mutex::new(file)).map_err(|_| anyhow!("the log is kept in a file already"))?;
+    RUNS_AGAIN.set(again).map_err(|_| anyhow!("the log is kept in a file already"))
 }
 
 /// The lasting copy, opened where it can be; `None` while neither the data
@@ -453,6 +458,12 @@ pub fn log_disk_mounted() -> bool {
 /// the phone started as the kernel log stamps it. The lasting copy is a
 /// convenience the business does not stand on: its failing — a full disk,
 /// a disk gone — ends its part in the session, and does not fail the call.
+/// Whether this run found a log an earlier run left: the runs' own names
+/// in the file go back to it.
+pub fn runs_again() -> bool {
+    RUNS_AGAIN.get().copied().unwrap_or(false)
+}
+
 pub fn kmsg(line: &str) -> Result<()> {
     let mut f = OpenOptions::new().write(true).open("/dev/kmsg")?;
     f.write_all(format!("<6>skyward: {line}\n").as_bytes())?;
@@ -472,7 +483,56 @@ pub fn kmsg(line: &str) -> Result<()> {
             stop_lasting(&format!("the lasting log stopped: {e}"));
         }
     }
-    Ok(())
+    kept
+}
+
+/// Why something done over and over last failed, as the log was last told:
+/// a reading taken each second that keeps failing for one reason is told
+/// of once, and again when the reason changes or after it went well.
+#[derive(Debug, Default)]
+pub struct ToldOnce(Option<String>);
+
+impl ToldOnce {
+    /// Nothing told yet.
+    pub const fn new() -> ToldOnce {
+        ToldOnce(None)
+    }
+
+    /// Take in how it went this time, `why` it failed or none where it
+    /// went well: whether that is a failure the log has yet to be told of.
+    pub fn untold(&mut self, why: Option<&str>) -> bool {
+        let untold = why.is_some() && self.0.as_deref() != why;
+        self.0 = why.map(str::to_string);
+        untold
+    }
+}
+
+/// What is written to the kernel log for `text`, a write for each record.
+fn written(text: &str) -> Vec<String> {
+    records(text, RECORD_MOST - RECORD_OPENS.len() - 1).into_iter().map(|record| format!("{RECORD_OPENS}{record}\n")).collect()
+}
+
+/// `text` as the records the kernel log takes it in: each of its lines,
+/// and a line of more than `most` bytes as several, cut where a character
+/// ends. Text without a line in it is one empty record.
+fn records(text: &str, most: usize) -> Vec<&str> {
+    let mut records = Vec::new();
+    for mut line in text.lines() {
+        while line.len() > most {
+            let mut end = most;
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            let (record, rest) = line.split_at(end);
+            records.push(record);
+            line = rest;
+        }
+        records.push(line);
+    }
+    if records.is_empty() {
+        records.push("");
+    }
+    records
 }
 
 /// End the lasting copy's part in this session, saying once on the kernel
@@ -539,6 +599,56 @@ mod tests {
     fn kernel_log_lines_lose_their_levels() {
         let held = "<6>[    5.499346] skyward: ro.build.version.release is 16\n<3>[    6.1] dwc3 a600000.dwc3: a > b\nno level\n";
         assert_eq!(without_levels(held), "[    5.499346] skyward: ro.build.version.release is 16\n[    6.1] dwc3 a600000.dwc3: a > b\nno level\n");
+    }
+
+    #[test]
+    fn text_goes_to_the_kernel_log_a_record_for_each_line() {
+        assert_eq!(records("erasing ended: done", 963), ["erasing ended: done"]);
+        assert_eq!(records("mkfs ended with 1:\nInfo: sector size = 4096\n\nError: device is busy\n", 963), ["mkfs ended with 1:", "Info: sector size = 4096", "", "Error: device is busy"]);
+        assert_eq!(records("", 963), [""], "a record still says that something was logged");
+        assert_eq!(written("the phone slept and woke"), ["<6>skyward: the phone slept and woke\n"]);
+    }
+
+    #[test]
+    fn a_line_longer_than_a_record_is_several_cut_where_a_character_ends() {
+        let line = "x".repeat(2000);
+        let cut = records(&line, 963);
+        assert_eq!(cut.iter().map(|record| record.len()).collect::<Vec<_>>(), [963, 963, 74]);
+        assert_eq!(cut.concat(), line);
+        let exact = "y".repeat(963);
+        assert_eq!(records(&exact, 963), [exact.as_str()], "a line a record just holds is one");
+        // Each of these characters takes three bytes.
+        let wide = "擦除结束".repeat(3);
+        let cut = records(&wide, 10);
+        assert_eq!(cut, ["擦除结", "束擦除", "结束擦", "除结束"]);
+        assert_eq!(cut.concat(), wide);
+    }
+
+    /// The output of a tool that makes a filesystem, as the erase page
+    /// logs it when the tool fails, is longer than the kernel takes in one
+    /// write, and goes in whole in writes the kernel takes.
+    #[test]
+    fn no_write_to_the_kernel_log_is_longer_than_the_kernel_takes() {
+        let said = format!("erasing ended: Format failed: /system/bin/make_f2fs ended with 1: {}\n{}", "Info: ".repeat(400), "错误：设备正忙。".repeat(200));
+        let writes = written(&said);
+        assert!(writes.len() > 2);
+        for write in &writes {
+            assert!(write.len() <= RECORD_MOST, "{} bytes", write.len());
+            assert!(write.starts_with(RECORD_OPENS) && write.ends_with('\n'));
+        }
+        let logged: String = writes.iter().map(|write| &write[RECORD_OPENS.len()..write.len() - 1]).collect();
+        assert_eq!(logged, said.replace('\n', ""));
+    }
+
+    #[test]
+    fn a_failure_that_keeps_coming_is_told_of_once() {
+        let mut told = ToldOnce::new();
+        assert!(!told.untold(None), "nothing failed");
+        assert!(told.untold(Some("read status: I/O error")));
+        assert!(!told.untold(Some("read status: I/O error")), "the same a second later");
+        assert!(told.untold(Some("read capacity: no data")), "another reason");
+        assert!(!told.untold(None), "it went well");
+        assert!(told.untold(Some("read capacity: no data")), "the same reason, after it went well in between");
     }
 
     #[test]

@@ -30,10 +30,11 @@ const STAGED_DIR: &str = "/kmlibs/vendor";
 /// made for.
 const VENDOR_INTERFACE: &str = "ro.vndk.version";
 
-/// Where the phone describes the services its own partitions carry, and
-/// where a recovery looks for such descriptions.
-const DESCRIPTIONS: [&str; 2] = ["/vendor/etc/vintf/manifest", "/odm/etc/vintf/manifest"];
+/// Where a recovery looks for the descriptions of the services the running
+/// system carries, and the one the recovery writes there of the phone's
+/// own.
 const RECOVERY_DESCRIPTIONS: &str = "/system/etc/vintf/manifest";
+const PHONE_DESCRIPTION: &str = "phone.xml";
 
 /// The name init knows the service directory by, and the program it runs.
 const DIRECTORY_SERVICE: &str = "servicemanager";
@@ -364,8 +365,7 @@ pub fn publish_descriptions(wanted: &[String], files: &[String], texts: &[String
     fs::create_dir_all(into).with_context(|| format!("make {}", into.display()))?;
     // Both directories read these as the users their init scripts name,
     // and what the recovery makes under its own umask is root's alone: the
-    // folder and each description are given the modes the system's own
-    // copies have.
+    // folder and the description are given the modes the system's own have.
     fs::set_permissions(into, std::os::unix::fs::PermissionsExt::from_mode(0o755))
         .with_context(|| format!("open {} to every user", into.display()))?;
     let mut copied = 0;
@@ -435,7 +435,7 @@ pub fn publish_descriptions(wanted: &[String], files: &[String], texts: &[String
             let _ = skyward_sys::kmsg(&format!("not all of the phone's services registered again: {e:#}"));
         }
     }
-    Ok(copied)
+    Ok(())
 }
 
 /// What has registered with the service directory, each with the init
@@ -511,15 +511,6 @@ fn say_framework(dir: &Path) -> Result<usize> {
         }
     }
     Ok(rewritten)
-}
-
-/// Whether a description is of the service registered under `name`, which
-/// reads as the interface and then the instance: the description names the
-/// two separately.
-fn describes(text: &str, name: &str) -> bool {
-    let Some((interface, instance)) = name.rsplit_once('/') else { return false };
-    let Some((package, interface)) = interface.rsplit_once('.') else { return false };
-    text.contains(package) && text.contains(&format!("{interface}/{instance}"))
 }
 
 /// Wait until the service directory is a new process and takes calls

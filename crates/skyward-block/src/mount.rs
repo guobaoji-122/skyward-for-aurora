@@ -1,3 +1,8 @@
+use std::ffi::CString;
+use std::io;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
+
 /// Filesystems Android puts on logical and metadata partitions, in the order
 /// a device's fstab lists alternatives for one mount point.
 pub const FILESYSTEMS: [&str; 3] = ["erofs", "ext4", "f2fs"];
@@ -190,11 +195,7 @@ mod sys {
     /// Mount what shows at `target` again with the flags it has, writable
     /// or read-only. Going read-only writes all it holds out first.
     pub fn remount_writable(target: &Path, writable: bool) -> Result<()> {
-        let c = cstr(target)?;
-        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-            return Err(os_error()).with_context(|| format!("look at the mount on {}", target.display()));
-        }
+        let st = super::statvfs(target).with_context(|| format!("look at the mount on {}", target.display()))?;
         let kept = [
             (libc::ST_NOSUID, libc::MS_NOSUID),
             (libc::ST_NODEV, libc::MS_NODEV),
