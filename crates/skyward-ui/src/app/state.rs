@@ -227,6 +227,15 @@ pub struct State {
     pub queue_picking: bool,
     /// The package whose install failed, which stopped the queue there.
     pub queue_stopped: Option<String>,
+    pub drive: Folder,
+    /// Magisk, KernelSU or APatch and its modules.
+    pub magisk: Magisk,
+    /// The file manager is choosing a module zip for the Magisk page.
+    /// How fast data went over the network joined in the last second.
+    pub traffic: Traffic,
+    /// The web page, where the browser stands, what it has saved, and the
+    /// form and cookies it keeps.
+    pub browser: Browser,
 }
 
 impl Default for State {
@@ -329,6 +338,8 @@ impl Default for State {
             queue_stopped: None,
         }
     }
+            magisk: Magisk::default(),
+            browser: Browser::default(),
 }
 
 impl State {

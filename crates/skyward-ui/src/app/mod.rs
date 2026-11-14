@@ -116,7 +116,7 @@ pub use wlan::*;
 
 /// The pages of the recovery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Screen {
+
     Decrypt,
     Home,
     Settings,
@@ -227,6 +227,15 @@ pub enum Screen {
     /// A network added by hand: its name, how it is protected and its
     /// password, typed on the screen's keyboard.
     WlanAdd,
+    FilesSearch,
+    Browser,
+    BrowserAddress,
+    BrowserDownloads,
+    BrowserForm,
+    BrowserFull,
+    BrowserTabs,
+    BrowserQuick,
+    Magisk,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -267,11 +276,12 @@ pub enum Confirm {
     ClearStarter,
     InstallQueue,
 
+    Avb(bool),
 }
 
 /// What a control does when touched.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Action {
+
     Open(Screen),
     /// Leave the decrypt page for the page it was opened from; the page
     /// the recovery started on, for the home page without keeping it
@@ -431,6 +441,55 @@ pub enum Action {
     QueueDrop(usize),
     AodStyle,
 
+    FilesSearch,
+    ClearFilesSearch,
+    OpenOtg,
+    OpenMagisk,
+    ReadMagisk,
+    ToggleMagiskModule(usize),
+    RemoveMagiskModule(usize),
+    MagiskRepo,
+    InstallMagiskModule,
+    MagiskPickZip,
+    CheckMagiskUpdate,
+    MagiskDownload,
+    QueuePick(Place),
+    BrowserAddress,
+    BrowserGo,
+    BrowserTo(&'static str),
+    BrowserLink(usize),
+    BrowserHistory(usize),
+    BrowserSaveFile,
+    BrowserStopDownload,
+    BrowserBack,
+    BrowserForward,
+    BrowserReload,
+    BrowserHome,
+    BrowserDownloads,
+    BrowserZoomOut,
+    BrowserZoomIn,
+    BrowserBasic,
+    BrowserKeyboard,
+    BrowserFullLoad,
+    BrowserOpenDownload(usize),
+    BrowserClearAddress,
+    BrowserTabs,
+    BrowserNewTab,
+    BrowserPickTab(usize),
+    BrowserCloseTab(usize),
+    BrowserQuick,
+    BrowserQuickOpen(usize),
+    BrowserQuickRemove(usize),
+    BrowserQuickAdd,
+    BrowserQuickReset,
+    BrowserFormField(usize, usize),
+    BrowserFormSubmit(usize),    /// Show the optional full browser plugin.
+    BrowserFull,
+    BrowserPluginInstall,
+    BrowserPluginStart,
+    BrowserPluginTap(u16, u16),
+    BrowserPluginStop,
+    BrowserPluginRemove,
 }
 
 /// One finger, in screen pixels.
@@ -461,7 +520,7 @@ pub enum Shot {
 
 /// Work the runtime carries out on the UI's behalf.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Effect {
+
     Reboot(Target),
     /// A short tap of the vibration motor.
     Haptic,
@@ -642,6 +701,25 @@ pub enum Effect {
     ClearStarter,
     LocalSend(bool),
 
+    ReadUsbDir(String),
+    ReadMagisk,
+    ToggleMagisk { id: String, path: String, enabled: bool },
+    RemoveMagisk { id: String, path: String },
+    InstallMagiskModule(String),
+    CheckMagiskUpdate,
+    DownloadMagisk,
+    BrowserOpen { url: String, cookie: Option<String> },
+    BrowserSubmit { url: String, fields: Vec<(String, String)>, post: bool, cookie: Option<String> },
+    BrowserDownload { url: String, name: String, path: String },
+    StopBrowser,
+    BrowserPluginInstall { archive: String, dir: String },
+    BrowserPluginStart { dir: String, url: String, out: String },
+    BrowserPluginTap { x: u16, y: u16 },
+    BrowserPluginPinch { scale: f64 },
+    BrowserPluginText(String),
+    BrowserPluginReload,
+    BrowserPluginStop,
+    BrowserPluginRemove { dir: String },
 }
 
 enum Drag {
@@ -1657,4 +1735,326 @@ impl App {
         self.layer = None;
         self.dirty = true;
     }
+}#[derive(Clone, Debug, PartialEq)]
+pub enum BrowserView {
+    /// The start page: the address, links to sites, what was read before,
+    /// and the downloads.
+    Home,
+    /// A page being read, or a file being looked at, and its address.
+    Loading(String),
+    Page(WebPage),
+    File(FileOffer),
+    /// A page drawn by the external Chromium plugin, shown under the normal
+    /// browser bar and dock.
+    Full,
+    /// The address asked for, and why nothing came back.
+    Failed { url: String, why: String },
 }
+
+/// How a file the browser saves stands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BrowserSave {
+    Downloading { done: u64, total: Option<u64> },
+    Done,
+    Stopped,
+    Failed(String),
+}
+
+/// A file the browser offers, or offered, to save.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrowserDownload {
+    pub name: String,
+    pub url: String,
+    /// Where it goes: internal storage once it is open, the recovery's own
+    /// memory where it is not.
+    pub path: String,
+    pub size: Option<u64>,
+    pub done: u64,
+    pub state: BrowserSave,
+}
+
+/// One open page, kept while another tab shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BrowserTab {
+    pub url: String,
+    pub address: String,
+    pub view: BrowserView,
+    pub history: Vec<String>,
+    pub at: usize,
+    pub form: Vec<Vec<String>>,
+    pub field: Option<(usize, usize)>,
+}
+
+impl BrowserTab {
+    pub fn home() -> BrowserTab {
+        BrowserTab {
+            url: String::new(),
+            address: String::new(),
+            view: BrowserView::Home,
+            history: Vec::new(),
+            at: 0,
+            form: Vec::new(),
+            field: None,
+        }
+    }
+
+    pub fn title(&self, l: Lang) -> String {
+        match &self.view {
+            BrowserView::Home => l.pick(["主页", "首頁", "Home"]).to_string(),
+            BrowserView::Loading(url) => url.clone(),
+            BrowserView::Page(page) => page.title.clone(),
+            BrowserView::File(file) => file.name.clone(),
+            BrowserView::Full => self.url.clone(),
+            BrowserView::Failed { url, .. } => url.clone(),
+        }
+    }
+}
+
+/// One of the start page's shortcuts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuickLink {
+    pub title: String,
+    pub url: String,
+    pub color: Rgba,
+    pub icon: Icon,
+}
+
+/// The browser's page, where it stands, what it has saved, and the form it
+/// is filling in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Browser {
+    /// What is typed in the address field.
+    pub address: String,
+    /// The address of the page shown.
+    pub url: String,
+    pub view: BrowserView,
+    /// The addresses read, oldest first, and which of them shows.
+    pub history: Vec<String>,
+    pub at: usize,
+    pub downloads: Vec<BrowserDownload>,
+    /// The download under way, by its place in `downloads`.
+    pub saving: Option<usize>,
+    /// The values typed into the page's form fields, by form and field.
+    pub form: Vec<Vec<String>>,
+    /// Which field the keyboard types into, where one is chosen.
+    pub field: Option<(usize, usize)>,
+    /// The cookie jar: name, value, domain, path, and when it expires.
+    pub cookies: Vec<Cookie>,
+    /// The plugin's state, and where it was found or why it is not there.
+    pub full: BrowserFull,
+    /// The last page the plugin rendered, as PNG.
+    pub full_shot: Option<Vec<u8>>,
+    /// Whether the page shown is the plugin's, and new addresses go to it.
+    pub full_active: bool,
+    /// The plugin page's CSS zoom, changed by the full-mode zoom buttons.
+    pub full_zoom: f32,
+    /// The keyboard is typing into the plugin page's focused field.
+    pub full_text: bool,
+    /// The last place tapped on the plugin page, in per-mille.
+    pub full_touch: (u16, u16),
+    /// The plugin's progress, from 0 to 1.
+    pub full_progress: Option<f32>,
+    /// The open pages, and which one shows.
+    pub tabs: Vec<BrowserTab>,
+    pub active: usize,
+    /// The start page's shortcuts.
+    pub quick: Vec<QuickLink>,
+}
+
+/// One cookie the browser sends back to a server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cookie {
+    pub name: String,
+    pub value: String,
+    pub domain: String,
+    pub path: String,
+    /// Seconds since the epoch, or none for the session.
+    pub expires: Option<i64>,
+}
+
+/// What the optional Linux Chromium plugin is doing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BrowserFull {
+    /// Not looked for yet.
+    Unknown,
+    /// The plugin is not there: why.
+    Absent(String),
+    /// The plugin's files are there, at this folder.
+    Ready(String),
+    /// The plugin is being fetched or unpacked.
+    Installing { done: u64, total: Option<u64> },
+    /// The plugin is running at this local debugging address.
+    Running(String),
+    Failed(String),
+}
+
+impl Default for Browser {
+    fn default() -> Self {
+        Browser {
+            address: String::new(),
+            url: String::new(),
+            view: BrowserView::Home,
+            history: Vec::new(),
+            at: 0,
+            downloads: Vec::new(),
+            saving: None,
+            form: Vec::new(),
+            field: None,
+            cookies: Vec::new(),
+            full: BrowserFull::Unknown,
+            full_shot: None,
+            full_active: false,
+            full_zoom: 1.0,
+            full_text: false,
+            full_touch: (500, 500),
+            full_progress: None,
+            tabs: vec![BrowserTab::home()],
+            active: 0,
+            quick: default_quick(),
+        }
+    }
+}
+
+fn default_quick() -> Vec<QuickLink> {
+    vec![
+        QuickLink { title: "GitHub".into(), url: "https://github.com".into(), color: Rgba::rgb(0x34, 0x82, 0xff), icon: Icon::Globe },
+        QuickLink {
+            title: "Skyward".into(),
+            url: "https://github.com/kirklin/skyward".into(),
+            color: Rgba::rgb(0x77, 0x67, 0xf9),
+            icon: Icon::Layers,
+        },
+        QuickLink {
+            title: "LineageOS".into(),
+            url: "https://download.lineageos.org".into(),
+            color: Rgba::rgb(0x1d, 0xcd, 0x3a),
+            icon: Icon::Install,
+        },
+        QuickLink {
+            title: "Bing".into(),
+            url: "https://www.bing.com".into(),
+            color: Rgba::rgb(0xff, 0x69, 0x00),
+            icon: Icon::Globe,
+        },
+    ]
+}
+
+impl Browser {
+    pub fn page(&self) -> Option<&WebPage> {
+        match &self.view {
+            BrowserView::Page(page) => Some(page),
+            _ => None,
+        }
+    }
+
+    pub fn downloading(&self) -> bool {
+        self.saving.is_some_and(|i| matches!(self.downloads.get(i).map(|d| &d.state), Some(BrowserSave::Downloading { .. })))
+    }
+
+    fn sync_tab(&mut self) {
+        if self.active >= self.tabs.len() {
+            self.tabs.push(BrowserTab::home());
+            self.active = self.tabs.len() - 1;
+        }
+        self.tabs[self.active] = BrowserTab {
+            url: self.url.clone(),
+            address: self.address.clone(),
+            view: self.view.clone(),
+            history: self.history.clone(),
+            at: self.at,
+            form: self.form.clone(),
+            field: self.field,
+        };
+    }
+
+    fn load_tab(&mut self) {
+        let Some(tab) = self.tabs.get(self.active).cloned() else { return };
+        self.url = tab.url;
+        self.address = tab.address;
+        self.view = tab.view;
+        self.history = tab.history;
+        self.at = tab.at;
+        self.form = tab.form;
+        self.field = tab.field;
+    }
+
+    pub fn new_tab(&mut self) {
+        self.sync_tab();
+        self.tabs.push(BrowserTab::home());
+        self.active = self.tabs.len() - 1;
+        self.load_tab();
+    }
+
+    pub fn switch_tab(&mut self, at: usize) {
+        if at >= self.tabs.len() {
+            return;
+        }
+        self.sync_tab();
+        self.active = at;
+        self.load_tab();
+    }
+
+    pub fn close_tab(&mut self, at: usize) {
+        if at >= self.tabs.len() {
+            return;
+        }
+        if self.active == at {
+            self.sync_tab();
+        }
+        self.tabs.remove(at);
+        if self.tabs.is_empty() {
+            self.tabs.push(BrowserTab::home());
+            self.active = 0;
+        } else if self.active > at {
+            self.active -= 1;
+        } else if self.active >= self.tabs.len() {
+            self.active = self.tabs.len() - 1;
+        } else if self.active == at {
+            self.active = self.active.min(self.tabs.len() - 1);
+        }
+        self.load_tab();
+    }
+}
+
+/// Magisk, KernelSU or APatch, and the modules it runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MagiskRoot {
+    Unknown,
+    Locked,
+    Absent,
+    Present(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MagiskModule {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub author: String,
+    pub description: String,
+    pub enabled: bool,
+    pub removing: bool,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Magisk {
+    pub root: MagiskRoot,
+    /// The modules found, or why they could not be read.
+    pub modules: Option<Result<Vec<MagiskModule>, String>>,
+    /// The installed Magisk version, when Magisk is the root solution.
+    pub version: Option<String>,
+    /// The newest Magisk release found, if it has been checked.
+    pub latest: Option<String>,
+}
+
+impl Default for Magisk {
+    fn default() -> Self {
+        Magisk { root: MagiskRoot::Unknown, modules: None, version: None, latest: None }
+    }
+}
+
+/// How far asking the update server for the newest system has come.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+
+
