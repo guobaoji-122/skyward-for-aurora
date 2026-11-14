@@ -1,4 +1,5 @@
 pub mod app;
+pub mod browser;
 pub mod canvas;
 pub mod charge;
 pub mod color;

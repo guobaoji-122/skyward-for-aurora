@@ -1205,6 +1205,8 @@ struct Pages<'a> {
     switched: bool,
     /// The DNS servers the network joined gave, for looking names up.
     servers: Servers,
+    /// The browser's worker: a page being read, a file saved, a frame drawn.
+    browser: Option<crate::browser::Worker>,
     /// The WLAN, on a phone whose driver the recovery brings up.
     wlan: Option<wlan::Worker>,
     scanned_at: Instant,
@@ -1415,6 +1417,7 @@ impl<'a> Pages<'a> {
             switch_asked: false,
             switched: false,
             servers: Arc::new(Mutex::new(Vec::new())),
+            browser: None,
             wlan: None,
             scanned_at: Instant::now(),
             checker: None,
@@ -1780,6 +1783,9 @@ impl<'a> Pages<'a> {
         }
         if let Some(d) = &self.decryptor {
             fds.push(d.fd());
+        }
+        if let Some(b) = &self.browser {
+            fds.push(b.fd());
         }
         if let Some(p) = &self.part_worker {
             fds.push(p.fd());
@@ -2325,6 +2331,40 @@ impl Pages<'_> {
 
     /// How opening the data partition, or a user's own files in it, ended.
     fn decrypt_told(&mut self, now: u64) -> Result<()> {
+        let mut browser_done = false;
+        if let Some(worker) = &self.browser {
+            for ev in worker.events() {
+                match ev {
+                    crate::browser::Event::Opened(opened) => {
+                        self.app.browser_opened(opened);
+                        browser_done = true;
+                    }
+                    crate::browser::Event::Saved(saving) => self.app.browser_saved(saving.done, saving.total),
+                    crate::browser::Event::Ended(ended) => {
+                        self.app.browser_save_ended(ended.map(|_| ()), now);
+                        browser_done = true;
+                    }
+                    crate::browser::Event::Installed(ended) => {
+                        self.app.browser_plugin_installed(ended);
+                        browser_done = true;
+                    }
+                    crate::browser::Event::Shot(shot) => {
+                        self.app.browser_plugin_shot(shot);
+                        browser_done = true;
+                    }
+                    crate::browser::Event::Focus(focus) => self.app.browser_plugin_focus(focus),
+                    crate::browser::Event::PluginSaved { done, total, speed } => self.app.plugin_saved(done, total, speed),
+                    crate::browser::Event::PluginEnded(ended) => {
+                        self.app.plugin_downloaded(ended);
+                        browser_done = true;
+                    }
+                }
+            }
+        }
+        if browser_done {
+            self.browser = None;
+        }
+
         let Some(ended) = self.decryptor.as_ref().and_then(Decryptor::ended) else { return Ok(()) };
         self.decryptor = None;
         match ended {
@@ -2560,6 +2600,126 @@ impl Pages<'_> {
                 ensure!(self.decryptor.is_none(), "the data partition is being opened already");
                 let job = decrypt::Job::Unlock { closed: self.closed.clone(), user, credential: code.into_bytes() };
                 self.decryptor = Some(Decryptor::start(job)?);
+            }
+            Effect::BrowserOpen { url, cookie } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::Open { url, cookie }, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_opened(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserSubmit { url, fields, post, cookie } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                let task = crate::browser::Task::Submit { url, fields, post, cookie };
+                match crate::browser::Worker::start(task, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_opened(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserDownload { url, path, .. } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                let task = crate::browser::Task::Save { url, path: PathBuf::from(path) };
+                match crate::browser::Worker::start(task, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_save_ended(Err(format!("{e:#}")), now),
+                }
+            }
+            Effect::StopBrowser => {
+                if let Some(worker) = &self.browser {
+                    worker.stop();
+                }
+            }
+            Effect::BrowserPluginInstall { archive, dir } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                let task = crate::browser::Task::Install { archive: PathBuf::from(archive), dir: PathBuf::from(dir) };
+                match crate::browser::Worker::start(task, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_installed(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginStart { dir, url, out } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                let task = crate::browser::Task::FullStart { dir: PathBuf::from(dir), url };
+                let _ = out;
+                match crate::browser::Worker::start(task, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginTap { x, y } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::FullTap { x, y }, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginPinch { scale } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::FullPinch { scale }, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginText(text) => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::FullText { text }, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginScroll { dy } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::FullScroll { dy }, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginReload => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                match crate::browser::Worker::start(crate::browser::Task::FullReload, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.browser_plugin_shot(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginDownload { url, path } => {
+                if let Some(worker) = self.browser.take() {
+                    worker.stop();
+                }
+                let task = crate::browser::Task::PluginDownload { url, path: PathBuf::from(path) };
+                match crate::browser::Worker::start(task, self.servers.clone()) {
+                    Ok(worker) => self.browser = Some(worker),
+                    Err(e) => self.app.plugin_downloaded(Err(format!("{e:#}"))),
+                }
+            }
+            Effect::BrowserPluginStop => {
+                if let Some(worker) = &self.browser {
+                    worker.stop();
+                }
+                let _ = crate::browser::Worker::start(crate::browser::Task::FullStop, self.servers.clone())
+                    .map(|w| w.stop());
+            }
+            Effect::BrowserPluginRemove { dir } => {
+                let _ = std::fs::remove_dir_all(dir);
             }
             Effect::ReadDir(folder) => list(&mut self.app, folder)?,
             Effect::ReadMagisk => {

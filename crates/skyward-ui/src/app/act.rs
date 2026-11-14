@@ -6,6 +6,9 @@ impl App {
     /// Carry out a tapped control.
     pub(super) fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
+        if Self::is_browser_action(action) {
+            return self.browser_act(action, now);
+        }
         match action {
             Action::Open(s) => {
                 if s == Screen::Search && self.screen() == Screen::Home {
@@ -601,6 +604,7 @@ impl App {
                 }
             }
             Action::Unavailable(text) => self.say(text, now),
+            _ => {}
         }
         Vec::new()
     }
@@ -609,6 +613,11 @@ impl App {
     fn typing(&mut self) -> &mut String {
         match self.screen() {
             Screen::Search => &mut self.state.search,
+            Screen::BrowserAddress => &mut self.state.browser.address,
+            Screen::BrowserForm => {
+                let (form, field) = self.state.browser.field.expect("the form page has a field");
+                &mut self.state.browser.form[form][field]
+            }
             Screen::FilesSearch => &mut self.state.files_search,
             Screen::Decrypt => &mut self.state.code,
             Screen::Rename => &mut self.state.new_name,
@@ -654,6 +663,17 @@ impl App {
                     if let Some(first) = search::find_on(&self.state.search, l, |screen| self.state.offers(screen)).first() {
                         return self.act(Action::Open(first.screen), now);
                     }
+                }
+                Screen::BrowserAddress => {
+                    let input = self.state.browser.address.clone();
+                    self.open(Screen::Browser);
+                    return self.browser_go(&input, now);
+                }
+                Screen::BrowserForm => {
+                    let (form, _) = self.state.browser.field.expect("the form page has a field");
+                    self.state.browser.field = None;
+                    self.back(now);
+                    return self.act(Action::BrowserFormSubmit(form), now);
                 }
                 Screen::Decrypt if self.state.code.is_empty() => self.say(l.pick(["请输入锁屏密码", "請輸入螢幕鎖定密碼", "Enter the screen lock"]), now),
                 Screen::Decrypt => {

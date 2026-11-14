@@ -117,6 +117,8 @@ pub struct State {
     pub files_found: Vec<usize>,
     /// Magisk, KernelSU or APatch and its modules.
     pub magisk: crate::magisk::Magisk,
+    /// The browser's pages and what it is doing.
+    pub browser: super::Browser,
     /// The folder of internal storage a file to install is chosen in, its
     /// path from the top of the storage.
     pub storage: Folder,
@@ -243,6 +245,7 @@ impl Default for State {
             files_search: String::new(),
             files_found: Vec::new(),
             magisk: crate::magisk::Magisk::default(),
+            browser: super::Browser::default(),
             storage: Folder::new(""),
             usb_drive: None,
             drive: Folder::new(""),

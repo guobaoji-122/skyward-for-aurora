@@ -8,6 +8,7 @@ pub mod iface;
 pub mod reach;
 pub mod release;
 pub mod supplicant;
+pub mod web;
 pub mod wlan;
 
 /// Work stopped because it was asked to.

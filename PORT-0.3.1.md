@@ -1,27 +1,21 @@
-# Port to the 0.3.1 pages
+# Browser port to 0.3.1
 
-The 0.3.1 merge split `app.rs` into `app/` modules. Features are being ported
-back one at a time.
+The browser is being rebuilt on the 0.3.1 `app/` modules rather than copied from
+the deleted `app.rs`.
 
-## Done
+## In this build
 
-- File manager search
-  - a Search control in the file manager's dock
-  - matches the current folder's names by letters, pinyin, and pinyin initials
-  - opens the original entry, so folders, text files and installable files keep
-    their normal behaviour
-- Magisk / KernelSU / APatch
-  - reads `/data/adb/modules`, `/data/adb/ksu/modules` and
-    `/data/adb/ap/modules`
-  - lists modules, enables or disables one, and marks one for removal
-  - the page is under Advanced
+- Browser entry under Advanced
+- Basic reader: address bar, typed addresses and Bing search, HTML text, links,
+  pictures, forms and the browser's dock
+- Tabs, downloads page, start page shortcuts, menu, history and bookmarks
+- Full mode: plugin install/start/stop, Chromium frame and touch/keyboard/
+  scroll controls
+- Plugin package download
 
-## Not ported yet
+## Still rough
 
-- the browser: address bar, basic HTML reader, tabs, downloads, cookies, forms,
-  full mode, CDP frames, plugin download
-- Magisk update download and module installation from a zip
-- Browser log export
-
-The browser is the largest port: its UI was built on the deleted `app.rs` and
-its runtime on the 0.3.4 `skyward` binary. It is kept on `backup-pre-031`.
+- full mode takes a fresh frame per action rather than a continuous stream
+- file manager search is still in the dock, not yet a top search box
+- OTG devices are not yet browsable from the file manager
+- Magisk online update and zip installation are not ported

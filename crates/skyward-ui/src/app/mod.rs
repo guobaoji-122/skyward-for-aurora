@@ -35,6 +35,7 @@ use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
 
 mod act;
 mod backup;
+mod browser;
 mod decrypt;
 mod draw;
 mod entry;
@@ -63,6 +64,7 @@ mod wipe;
 mod wlan;
 
 pub use backup::*;
+pub use browser::*;
 pub use decrypt::*;
 pub use entry::*;
 pub use filesystem::*;
@@ -119,6 +121,17 @@ pub enum Screen {
     FilesSearch,
     /// Magisk, KernelSU or APatch and the modules they run.
     Magisk,
+    /// The web, read as text, pictures and links.
+    Browser,
+    BrowserAddress,
+    BrowserDownloads,
+    BrowserForm,
+    BrowserFull,
+    BrowserTabs,
+    BrowserQuick,
+    BrowserMenu,
+    BrowserHistory,
+    BrowserBookmarks,
     /// One file, and what can be done with it.
     FileInfo,
     /// The permission bits of the entry the file page shows, a switch each.
@@ -321,6 +334,55 @@ pub enum Action {
     ToggleMagisk(usize, bool),
     /// Mark the module at this place for removal at the next start.
     RemoveMagisk(usize),
+    BrowserAddress,
+    BrowserSaveFile,
+    BrowserQuickOpen(usize),
+    BrowserQuick,
+    BrowserQuickAdd,
+    BrowserQuickRemove(usize),
+    BrowserQuickReset,
+    BrowserHistory(usize),
+    BrowserDownloads,
+    BrowserFull,
+    BrowserBasic,
+    BrowserPluginTap(u16, u16),
+    BrowserPluginPinch(f32),
+    BrowserPluginText,
+    BrowserPluginScroll(f32),
+    BrowserPluginReload,
+    BrowserPluginStop,
+    BrowserPluginStart,
+    BrowserPluginInstall,
+    BrowserPluginRemove,
+    BrowserPluginDownload,
+    BrowserStop,
+    BrowserStopDownload,
+    BrowserOpenDownload(usize),
+    BrowserClearAddress,
+    BrowserTabs,
+    BrowserNewTab,
+    BrowserPickTab(usize),
+    BrowserCloseTab(usize),
+    BrowserMenu,
+    BrowserBookmark,
+    BrowserHistoryList,
+    BrowserBookmarksList,
+    BrowserMarkOpen(usize),
+    BrowserMarkRemove(usize),
+    BrowserLink(usize),
+    BrowserBack,
+    BrowserForward,
+    BrowserReload,
+    BrowserHome,
+    BrowserFormField(usize, usize),
+    BrowserFormSubmit(usize),
+    BrowserFormClose,
+    BrowserFullLoad,
+    BrowserKeyboard,
+    BrowserScrollUp,
+    BrowserScrollDown,
+    BrowserZoomIn,
+    BrowserZoomOut,
     /// Open the terminal in the folder the file manager shows.
     TerminalHere,
     /// Open the entry at this place in a place's folder: a folder to look
@@ -492,6 +554,20 @@ pub enum Effect {
     ToggleMagisk { path: String, enabled: bool },
     /// Mark the module at this path for removal.
     RemoveMagisk(String),
+    BrowserOpen { url: String, cookie: Option<String> },
+    BrowserSubmit { url: String, fields: Vec<(String, String)>, post: bool, cookie: Option<String> },
+    BrowserDownload { url: String, name: String, path: String },
+    StopBrowser,
+    BrowserPluginInstall { archive: String, dir: String },
+    BrowserPluginDownload { url: String, path: String },
+    BrowserPluginStart { dir: String, url: String, out: String },
+    BrowserPluginTap { x: u16, y: u16 },
+    BrowserPluginPinch { scale: f64 },
+    BrowserPluginText(String),
+    BrowserPluginReload,
+    BrowserPluginScroll { dy: i64 },
+    BrowserPluginStop,
+    BrowserPluginRemove { dir: String },
     /// List the folder at this path from the top of a place, to choose a
     /// file to install in, telling what it holds with [`App::set_place`].
     ReadPlace(Place, String),

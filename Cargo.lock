@@ -1380,6 +1380,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2369,11 +2376,14 @@ name = "skyward"
 version = "0.3.1"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "evdev",
  "hex",
  "libc",
  "procfs",
+ "serde_json",
+ "sha1 0.10.7",
  "skyward-backup",
  "skyward-binder",
  "skyward-block",
@@ -2684,6 +2694,7 @@ dependencies = [
  "drm-ffi",
  "icu_locale_core",
  "jiff",
+ "jpeg-decoder",
  "libc",
  "pinyin",
  "png",
