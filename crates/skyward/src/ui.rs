@@ -2362,6 +2362,13 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         app.browser_plugin_focus(focus);
                         read = true;
                     }
+                    browser::Event::PluginSaved { done, total, speed } => {
+                        app.plugin_saved(done, total, speed);
+                    }
+                    browser::Event::PluginEnded(ended) => {
+                        app.plugin_downloaded(ended);
+                        read = true;
+                    }
                 }
             }
         }
@@ -2378,7 +2385,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         saved = true;
                     }
                     browser::Event::Opened(_) => unreachable!("saving a file reads no page"),
-                    browser::Event::Installed(_) | browser::Event::Shot(_) | browser::Event::Focus(_) => unreachable!("saving a file runs no plugin"),
+                    browser::Event::Installed(_) | browser::Event::Shot(_) | browser::Event::Focus(_) | browser::Event::PluginSaved { .. } | browser::Event::PluginEnded(_) => unreachable!("saving a file runs no plugin"),
                 }
             }
         }
@@ -3210,6 +3217,16 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         match browser::Worker::start(browser::Task::FullReload, servers.clone()) {
                             Ok(worker) => reader = Some(worker),
                             Err(e) => app.browser_plugin_shot(Err(format!("{e:#}"))),
+                        }
+                    }
+                    Effect::BrowserPluginDownload { url, path } => {
+                        if let Some(worker) = reader.take() {
+                            worker.stop();
+                        }
+                        let task = browser::Task::PluginDownload { url, path: PathBuf::from(path) };
+                        match browser::Worker::start(task, servers.clone()) {
+                            Ok(worker) => reader = Some(worker),
+                            Err(e) => app.plugin_downloaded(Err(format!("{e:#}"))),
                         }
                     }
                     Effect::BrowserPluginStop => {

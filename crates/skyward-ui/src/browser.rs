@@ -960,6 +960,8 @@ pub fn full(cx: &Ctx) -> Frame {
     );
     let mut rows = Vec::new();
     let mut actions = Vec::new();
+    rows.push(Row::new(l.pick(["在线下载插件", "線上取得外掛", "Download the plugin"])).icon(BLUE, Icon::Install).subtitle("GitHub Releases · chromium.zip").trail(Trail::Arrow));
+    actions.push(Action::BrowserPluginDownload);
     match &s.browser.full {
         BrowserFull::Ready(_) => {
             rows.push(Row::new(l.pick(["启动完整模式", "啟動完整模式", "Start full mode"])).icon(GREEN, Icon::Install).trail(Trail::Arrow));
@@ -980,6 +982,39 @@ pub fn full(cx: &Ctx) -> Frame {
     let list = widgets::list(&mut c, t, f, y + m.card_gap, &rows);
     out.extend(hits(&list.rows, &actions));
     y = list.bottom;
+    if let Some(d) = &s.browser.plugin_download {
+        if let Some(why) = &d.error {
+            y = widgets::footnote(&mut c, t, f, y + m.card_gap, why);
+        } else if d.total.is_some_and(|t| d.done >= t) {
+            y = widgets::footnote(
+                &mut c,
+                t,
+                f,
+                y + m.card_gap,
+                l.pick([
+                    "插件已下载，点上面的「安装或更新」安装",
+                    "外掛已下載，點上面的「安裝或更新」安裝",
+                    "Plugin downloaded. Tap Install or update above.",
+                ]),
+            );
+        } else {
+            let total = d.total;
+            let detail = match total {
+                Some(total) if total > 0 => format!("{} / {} · {}/s", fmt::file_size(d.done), fmt::file_size(total), fmt::file_size(d.speed)),
+                _ => format!("{} · {}/s", fmt::file_size(d.done), fmt::file_size(d.speed)),
+            };
+            let share = total.filter(|&t| t > 0).map(|t| (d.done as f32 / t as f32).clamp(0.0, 1.0));
+            y = widgets::progress_card(
+                &mut c,
+                t,
+                f,
+                y + m.card_gap,
+                l.pick(["正在下载插件", "正在下載外掛", "Downloading the plugin"]),
+                &detail,
+                share,
+            );
+        }
+    }
     if s.browser.full_shot.is_none() {
         if let Some(progress) = s.browser.full_progress {
             y = widgets::progress_card(

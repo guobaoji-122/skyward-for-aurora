@@ -301,6 +301,8 @@ pub struct Browser {
     pub full_touch: (u16, u16),
     /// The plugin's progress, from 0 to 1.
     pub full_progress: Option<f32>,
+    /// An online plugin download under way, or how it ended.
+    pub plugin_download: Option<PluginDownload>,
     /// The open pages, and which one shows.
     pub tabs: Vec<BrowserTab>,
     pub active: usize,
@@ -317,6 +319,15 @@ pub struct Browser {
 pub struct BrowserMark {
     pub title: String,
     pub url: String,
+}
+
+/// A plugin package coming from the release server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginDownload {
+    pub done: u64,
+    pub total: Option<u64>,
+    pub speed: u64,
+    pub error: Option<String>,
 }
 
 /// One cookie the browser sends back to a server.
@@ -366,6 +377,7 @@ impl Default for Browser {
             full_text: false,
             full_touch: (500, 500),
             full_progress: None,
+            plugin_download: None,
             tabs: vec![BrowserTab::home()],
             active: 0,
             quick: default_quick(),
@@ -1890,6 +1902,8 @@ pub enum Action {
     BrowserFull,
     /// Download and unpack the full browser plugin.
     BrowserPluginInstall,
+    /// Download the newest plugin package from GitHub Releases.
+    BrowserPluginDownload,
     /// Start the full browser plugin.
     BrowserPluginStart,
     /// Tap the page the full browser plugin drew, at this point of it, in
@@ -2866,6 +2880,8 @@ pub enum Effect {
     StopBrowser,
     /// Download and unpack the full browser plugin.
     BrowserPluginInstall { archive: String, dir: String },
+    /// Download the plugin package to `path`.
+    BrowserPluginDownload { url: String, path: String },
     /// Start the full browser plugin, which writes the page to `out`.
     BrowserPluginStart { dir: String, url: String, out: String },
     /// Tap the persistent full-mode page.
@@ -6448,6 +6464,31 @@ impl App {
         }
     }
 
+    /// The plugin package download's progress.
+    pub fn plugin_saved(&mut self, done: u64, total: Option<u64>, speed: u64) {
+        if let Some(d) = self.state.browser.plugin_download.as_mut() {
+            d.done = done;
+            d.total = total;
+            d.speed = speed;
+            d.error = None;
+            if self.screen() == Screen::BrowserFull {
+                self.refresh();
+            }
+        }
+    }
+
+    /// The plugin package finished, or why it did not.
+    pub fn plugin_downloaded(&mut self, ended: Result<(), String>) {
+        if let Some(d) = self.state.browser.plugin_download.as_mut() {
+            if let Err(why) = ended {
+                d.error = Some(why);
+            }
+        }
+        if self.screen() == Screen::BrowserFull {
+            self.refresh();
+        }
+    }
+
     pub fn browser_plugin_shot(&mut self, shot: Result<Vec<u8>, String>) {        match shot {
             Ok(png) => {
                 self.state.browser.full_shot = Some(png);
@@ -7098,6 +7139,19 @@ impl App {
             Action::BrowserFull => {
                 self.browser_check_full();
                 self.open(Screen::BrowserFull);
+            }
+            Action::BrowserPluginDownload => {
+                if !self.state.data.storage_open() {
+                    self.say(l.pick(["请先解密 data 分区", "請先解密 data 分割區", "Decrypt the data partition first"]), now);
+                } else if self.state.browser.plugin_download.as_ref().is_some_and(|d| d.error.is_none() && d.total.map_or(true, |t| d.done < t)) {
+                    self.say(l.pick(["插件正在下载", "外掛正在下載", "The plugin is downloading"]), now);
+                } else {
+                    self.state.browser.plugin_download = Some(PluginDownload { done: 0, total: None, speed: 0, error: None });
+                    return vec![Effect::BrowserPluginDownload {
+                        url: "https://github.com/Jamvii/skyward-for-aurora/releases/latest/download/chromium.zip".into(),
+                        path: "/sdcard/Download/Skyward/chromium.zip".into(),
+                    }];
+                }
             }
             Action::BrowserTabs => self.open(Screen::BrowserTabs),
             Action::BrowserNewTab => {
