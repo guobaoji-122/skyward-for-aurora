@@ -165,6 +165,42 @@ impl Cdp {
         base64::engine::general_purpose::STANDARD.decode(data).context("decode screenshot")
     }
 
+    /// Start the continuous frame stream; each [`Cdp::next_frame`] acknowledges
+    /// the previous frame before returning the next.
+    pub fn start_screencast(&mut self) -> Result<()> {
+        self.call(
+            "Page.startScreencast",
+            json!({
+                "format": "jpeg",
+                "quality": 72,
+                "maxWidth": VIEW_W * 2,
+                "maxHeight": VIEW_H * 2,
+                "everyNthFrame": 2
+            }),
+        )?;
+        Ok(())
+    }
+
+    pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>> {
+        loop {
+            let payload = read_frame(&mut self.stream)?;
+            let event: Value = match serde_json::from_slice(&payload) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if event["method"] != "Page.screencastFrame" {
+                continue;
+            }
+            let params = &event["params"];
+            let session = params["sessionId"].as_i64().unwrap_or(0);
+            let ack = json!({"id": self.next, "method": "Page.screencastFrameAck", "params": {"sessionId": session}});
+            self.next += 1;
+            write_frame(&mut self.stream, ack.to_string().as_bytes())?;
+            let data = params["data"].as_str().context("frame holds no data")?;
+            return Ok(Some(base64::engine::general_purpose::STANDARD.decode(data).context("decode frame")?));
+        }
+    }
+
     pub fn scroll(&mut self, dy: i64) -> Result<()> {
         self.call(
             "Input.synthesizeScrollGesture",

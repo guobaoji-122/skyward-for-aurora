@@ -1556,6 +1556,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     let mut skyward_updater: Option<updates::Worker> = None;
     // Reading a web page, and saving a file the browser offers.
     let mut reader: Option<browser::Worker> = None;
+    let mut stream: Option<browser::Worker> = None;
     let mut saver: Option<browser::Worker> = None;
     // The phone sleeps while its screen is off and nothing needs it awake.
     let sleeper = Sleeper::start()?;
@@ -2375,6 +2376,23 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         if read {
             reader = None;
         }
+        let mut stream_dead = false;
+        if let Some(worker) = &stream {
+            for ev in worker.events() {
+                match ev {
+                    browser::Event::Shot(Ok(frame)) => app.browser_plugin_shot(Ok(frame)),
+                    browser::Event::Shot(Err(why)) => {
+                        app.browser_plugin_shot(Err(why));
+                        stream_dead = true;
+                    }
+                    browser::Event::Focus(focus) => app.browser_plugin_focus(focus),
+                    browser::Event::Installed(_) | browser::Event::Opened(_) | browser::Event::Saved(_) | browser::Event::Ended(_) | browser::Event::PluginSaved { .. } | browser::Event::PluginEnded(_) => {}
+                }
+            }
+        }
+        if stream_dead {
+            stream = None;
+        }
         let mut saved = false;
         if let Some(worker) = &saver {
             for ev in worker.events() {
@@ -3164,13 +3182,13 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         }
                     }
                     Effect::BrowserPluginStart { dir, url, out } => {
-                        if let Some(worker) = reader.take() {
+                        if let Some(worker) = stream.take() {
                             worker.stop();
                         }
-                        let task = browser::Task::FullStart { dir: PathBuf::from(dir), url };
+                        let task = browser::Task::FullStream { dir: PathBuf::from(dir), url };
                         let _ = out;
                         match browser::Worker::start(task, servers.clone()) {
-                            Ok(worker) => reader = Some(worker),
+                            Ok(worker) => stream = Some(worker),
                             Err(e) => app.browser_plugin_shot(Err(format!("{e:#}"))),
                         }
                     }
@@ -3231,6 +3249,9 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     }
                     Effect::BrowserPluginStop => {
                         if let Some(worker) = &reader {
+                            worker.stop();
+                        }
+                        if let Some(worker) = &stream {
                             worker.stop();
                         }
                         let _ = browser::Worker::start(browser::Task::FullStop, servers.clone())

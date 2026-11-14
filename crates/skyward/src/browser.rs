@@ -38,6 +38,8 @@ pub enum Task {
     Full { dir: PathBuf, url: String, out: PathBuf },
     /// Start the persistent Chromium session used by the full browser.
     FullStart { dir: PathBuf, url: String },
+    /// Keep a continuous frame stream from the persistent page.
+    FullStream { dir: PathBuf, url: String },
     FullTap { x: u16, y: u16 },
     FullPinch { scale: f64 },
     FullText { text: String },
@@ -354,6 +356,22 @@ impl Worker {
                                 stop_full();
                                 tell(Event::Shot(Err(format!("{e:#}"))));
                             }
+                        }
+                    }
+                    Task::FullStream { dir, url } => {
+                        let result = (|| -> Result<()> {
+                            let mut cdp = full_started(&dir, &url)?;
+                            cdp.navigate(&url)?;
+                            cdp.start_screencast()?;
+                            while !stopping.load(Ordering::Relaxed) {
+                                if let Some(frame) = cdp.next_frame()? {
+                                    tell(Event::Shot(Ok(frame)));
+                                }
+                            }
+                            Ok(())
+                        })();
+                        if let Err(e) = result {
+                            tell(Event::Shot(Err(format!("{e:#}"))));
                         }
                     }
                     Task::FullTap { x, y } => {
