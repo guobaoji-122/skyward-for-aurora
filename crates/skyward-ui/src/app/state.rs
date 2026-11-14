@@ -111,6 +111,12 @@ pub struct State {
     pub held: Option<Action>,
     /// The folder the file manager shows.
     pub files: Folder,
+    /// What is typed to find an entry in the folder, and the entries it
+    /// found, by their places in the folder.
+    pub files_search: String,
+    pub files_found: Vec<usize>,
+    /// Magisk, KernelSU or APatch and its modules.
+    pub magisk: crate::magisk::Magisk,
     /// The folder of internal storage a file to install is chosen in, its
     /// path from the top of the storage.
     pub storage: Folder,
@@ -234,6 +240,9 @@ impl Default for State {
             layer: Layer::Letters,
             held: None,
             files: Folder::new("/"),
+            files_search: String::new(),
+            files_found: Vec::new(),
+            magisk: crate::magisk::Magisk::default(),
             storage: Folder::new(""),
             usb_drive: None,
             drive: Folder::new(""),

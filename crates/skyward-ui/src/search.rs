@@ -146,6 +146,43 @@ pub fn find_on(query: &str, l: Lang, offers: impl Fn(Screen) -> bool) -> Vec<&'s
     find(query, l).into_iter().filter(|e| offers(e.screen)).collect()
 }
 
+/// A name's pinyin initials, keeping Latin letters and digits.
+pub fn initials(name: &str) -> String {
+    use pinyin::ToPinyin;
+    let mut out = String::new();
+    for ch in name.chars() {
+        if let Some(py) = ch.to_pinyin() {
+            out.push_str(&py.first_letter().to_ascii_lowercase());
+        } else if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        }
+    }
+    out
+}
+
+fn plain(name: &str) -> String {
+    use pinyin::ToPinyin;
+    let mut out = String::new();
+    for ch in name.chars() {
+        if let Some(py) = ch.to_pinyin() {
+            out.push_str(py.plain());
+        } else if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        }
+    }
+    out
+}
+
+/// Whether a file name answers to what is typed, by its letters or by its
+/// Chinese name's pinyin and initials.
+pub fn file_matches(name: &str, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    name.to_lowercase().contains(&query) || initials(name).contains(&query) || plain(name).contains(&query)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

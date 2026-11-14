@@ -44,6 +44,7 @@ mod input;
 mod install;
 mod keys;
 mod manager;
+mod magisk;
 mod mount;
 mod nav;
 mod power;
@@ -114,6 +115,10 @@ pub enum Screen {
     /// Tools for the experienced: files, a terminal, the logs.
     Advanced,
     Files,
+    /// Finding an entry in the folder shown, by name or pinyin.
+    FilesSearch,
+    /// Magisk, KernelSU or APatch and the modules they run.
+    Magisk,
     /// One file, and what can be done with it.
     FileInfo,
     /// The permission bits of the entry the file page shows, a switch each.
@@ -304,6 +309,18 @@ pub enum Action {
     /// Open the file manager's entry at this place in the folder: a folder
     /// to look in, a text file to edit, or what can be done with any other.
     OpenEntry(usize),
+    /// Find an entry in the folder shown.
+    FilesSearch,
+    /// Open the file found at this place among the folder's entries.
+    OpenFound(usize),
+    /// Close the file search.
+    FilesSearchClose,
+    /// Read the root solution and its modules.
+    ReadMagisk,
+    /// Enable or disable the module at this place.
+    ToggleMagisk(usize, bool),
+    /// Mark the module at this place for removal at the next start.
+    RemoveMagisk(usize),
     /// Open the terminal in the folder the file manager shows.
     TerminalHere,
     /// Open the entry at this place in a place's folder: a folder to look
@@ -469,6 +486,12 @@ pub enum Effect {
     Unmount(String),
     /// List the folder at this path for the file manager.
     ReadDir(String),
+    /// Read the root solution and its modules.
+    ReadMagisk,
+    /// Enable or disable the module at this path.
+    ToggleMagisk { path: String, enabled: bool },
+    /// Mark the module at this path for removal.
+    RemoveMagisk(String),
     /// List the folder at this path from the top of a place, to choose a
     /// file to install in, telling what it holds with [`App::set_place`].
     ReadPlace(Place, String),

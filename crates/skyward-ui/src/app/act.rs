@@ -325,9 +325,48 @@ impl App {
                 }
             }
             Action::ClearSearch => {
-                self.state.search.clear();
+                if self.screen() == Screen::FilesSearch {
+                    self.state.files_search.clear();
+                    self.refind_files();
+                } else {
+                    self.state.search.clear();
+                }
                 self.edits += 1;
                 self.refresh();
+            }
+            Action::ReadMagisk => return vec![Effect::ReadMagisk],
+            Action::ToggleMagisk(i, enabled) => {
+                if let Some(Ok(modules)) = &self.state.magisk.modules
+                    && let Some(module) = modules.get(i)
+                {
+                    return vec![Effect::ToggleMagisk { path: module.path.clone(), enabled }];
+                }
+            }
+            Action::RemoveMagisk(i) => {
+                if let Some(Ok(modules)) = &self.state.magisk.modules
+                    && let Some(module) = modules.get(i)
+                {
+                    return vec![Effect::RemoveMagisk(module.path.clone())];
+                }
+            }
+            Action::FilesSearch => {
+                self.state.files_search.clear();
+                self.state.files_found = match &self.state.files.entries {
+                    Ok(entries) => (0..entries.len()).collect(),
+                    Err(_) => Vec::new(),
+                };
+                self.state.layer = Layer::Letters;
+                self.open(Screen::FilesSearch);
+            }
+            Action::FilesSearchClose => {
+                self.state.files_search.clear();
+                return self.back(now);
+            }
+            Action::OpenFound(i) => {
+                if let Some(&orig) = self.state.files_found.get(i) {
+                    self.back(now);
+                    return self.act(Action::OpenEntry(orig), now);
+                }
             }
             Action::OpenEntry(i) => {
                 let entry = self.state.files.entry(i).clone();
@@ -570,6 +609,7 @@ impl App {
     fn typing(&mut self) -> &mut String {
         match self.screen() {
             Screen::Search => &mut self.state.search,
+            Screen::FilesSearch => &mut self.state.files_search,
             Screen::Decrypt => &mut self.state.code,
             Screen::Rename => &mut self.state.new_name,
             Screen::WlanPassword => &mut self.state.password,
@@ -688,6 +728,9 @@ impl App {
         }
         // What is typed shows above the keyboard, which stays as it was
         // while its keys do.
+        if self.screen() == Screen::FilesSearch {
+            self.refind_files();
+        }
         if matches!(cap, Cap::Char(_) | Cap::Space | Cap::Backspace) && self.state.layer == layer {
             let t = self.theme();
             self.refresh_rows(0, (t.m.h as f32 - widgets::keyboard_height(&t)).floor() as u32);
@@ -695,6 +738,19 @@ impl App {
             self.refresh();
         }
         Vec::new()
+    }
+
+    fn refind_files(&mut self) {
+        let query = self.state.files_search.clone();
+        self.state.files_found = match &self.state.files.entries {
+            Ok(entries) => entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| search::file_matches(&e.name, &query))
+                .map(|(i, _)| i)
+                .collect(),
+            Err(_) => Vec::new(),
+        };
     }
 
     /// What a swipe-to-confirm control slid to its end does.

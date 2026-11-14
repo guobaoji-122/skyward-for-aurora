@@ -81,6 +81,8 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::BackupJob => backup_job(cx),
         Screen::Advanced => advanced(cx),
         Screen::Files => files(cx),
+        Screen::FilesSearch => files_search(cx),
+        Screen::Magisk => crate::magisk::screen(cx),
         Screen::FileInfo => file_info(cx),
         Screen::Permissions => permissions(cx),
         Screen::Editor => editor(cx),
@@ -2203,6 +2205,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
     let top = t.m.content_top;
     let tools = widgets::list(&mut c, t, f, top, &[
         Row::new(l.pick(FILES)).icon(BLUE, Icon::Folder),
+        Row::new("Magisk").icon(GREEN, Icon::Shield),
         Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
         Row::new(l.pick(RELABEL)).icon(PURPLE, Icon::Shield),
         Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
@@ -2211,6 +2214,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
     ]);
     let out = hits(&tools.rows, &[
         Action::Open(Screen::Files),
+        Action::Open(Screen::Magisk),
         Action::Open(Screen::Terminal),
         Action::Open(Screen::Relabel),
         Action::Open(Screen::Filesystems),
@@ -3093,10 +3097,55 @@ pub fn files(cx: &Ctx) -> Frame {
         });
         let (canvas, rects) = widgets::dock_bar(t, f, files::page(t), &[l.pick(CANCEL), go]);
         Dock { canvas, hits: hits(&rects, &[Action::Unpick, Action::Paste]) }
+    }).or_else(|| {
+        let (canvas, rects) = widgets::dock_bar(
+            t,
+            f,
+            files::page(t),
+            &[l.pick(["搜索", "搜尋", "Search"])],
+        );
+        Some(Dock { canvas, hits: hits(&rects, &[Action::FilesSearch]) })
     });
     let button = Some((widgets::Glyph::Terminal, Action::TerminalHere));
     let root = l.pick(["根目录", "根目錄", "Root"]);
     Frame { dock, button, ..listing(cx, &s.files, root, None, l.pick(["暂无文件", "沒有檔案", "No files"]), Action::OpenEntry, l.pick(FILES)) }
+}
+
+/// Finding an entry in the folder shown, by its name's letters or pinyin.
+pub fn files_search(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let m = &t.m;
+    let mut c = page(cx);
+    let (at, cancel) = widgets::search_layout(t);
+    let field = widgets::search_field(&mut c, t, f, at.x, at.w, at.y + at.h / 2.0, &s.files_search, l.pick(["搜索当前文件夹", "搜尋目前資料夾", "Search this folder"]));
+    widgets::cancel_button(&mut c, t, cancel);
+    let mut out = vec![Hit { rect: cancel, action: Action::FilesSearchClose }];
+    let top = field.field.y + field.field.h + m.dp(12.0);
+    if s.files_search.trim().is_empty() {
+        widgets::footnote(&mut c, t, f, top, l.pick([
+            "输入文件名、拼音或首字母，在当前文件夹中查找。",
+            "輸入檔名、拼音或首字母，在目前資料夾中尋找。",
+            "Type a file name, pinyin or initials to find it in this folder.",
+        ]));
+    } else if let Ok(entries) = &s.files.entries {
+        if s.files_found.is_empty() {
+            widgets::footnote(&mut c, t, f, top, l.pick(["没有匹配的文件", "沒有符合的檔案", "Nothing matches"]));
+        } else {
+            let rows: Vec<Row> = s
+                .files_found
+                .iter()
+                .filter_map(|&i| entries.get(i))
+                .map(|e| Row::new(&e.name).icon(BLUE, Icon::Folder).trail(Trail::Arrow))
+                .collect();
+            let list = widgets::list(&mut c, t, f, top, &rows);
+            out.extend(list.rows.iter().enumerate().map(|(i, &r)| Hit { rect: r, action: Action::OpenFound(i) }));
+        }
+    }
+    keyboard_hits(&mut c, t, f, s, l.pick(["搜索", "搜尋", "Search"]), &mut out);
+    if let Some(rect) = field.clear {
+        out.push(Hit { rect, action: Action::ClearSearch });
+    }
+    Frame { back: false, header: false, caret: Some(field.caret), ..Frame::new(t, c, out, l.pick(FILES), 0.0) }
 }
 
 const CANCEL: Text = ["取消", "取消", "Cancel"];

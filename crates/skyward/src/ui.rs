@@ -2562,6 +2562,22 @@ impl Pages<'_> {
                 self.decryptor = Some(Decryptor::start(job)?);
             }
             Effect::ReadDir(folder) => list(&mut self.app, folder)?,
+            Effect::ReadMagisk => {
+                let (root, modules) = crate::magisk::read();
+                self.app.magisk_read(root, modules.map_err(|e| format!("{e:#}")));
+            }
+            Effect::ToggleMagisk { path, enabled } => {
+                let ended = crate::magisk::toggle(&path, enabled).map_err(|e| format!("{e:#}"));
+                self.app.magisk_changed(ended, now);
+                let (root, modules) = crate::magisk::read();
+                self.app.magisk_read(root, modules.map_err(|e| format!("{e:#}")));
+            }
+            Effect::RemoveMagisk(path) => {
+                let ended = crate::magisk::remove(&path).map_err(|e| format!("{e:#}"));
+                self.app.magisk_changed(ended, now);
+                let (root, modules) = crate::magisk::read();
+                self.app.magisk_read(root, modules.map_err(|e| format!("{e:#}")));
+            }
             Effect::ReadPlace(place, folder) => list_place(&mut self.app, place, folder)?,
             Effect::Paste { op, path, into, clash } => self.paste(op, path, into, clash, now)?,
             Effect::Delete(path) => {

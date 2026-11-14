@@ -20,6 +20,8 @@ mod input;
 #[cfg(target_os = "android")]
 mod keys;
 #[cfg(target_os = "android")]
+mod magisk;
+#[cfg(target_os = "android")]
 mod merge;
 #[cfg(target_os = "android")]
 mod partwork;
