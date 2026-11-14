@@ -1,7 +1,7 @@
 //! Backing up and restoring on a thread of its own, telling the screen how
 //! far it has come.
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use skyward_backup::archive::{self, Skipped};
 use skyward_backup::store::{self, Reader, Stored, Writer};
 use skyward_backup::{Item, Manifest, Part, FORMAT};
@@ -11,13 +11,10 @@ use skyward_vab::{Slot, SnapshotState};
 use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::ffi::OsStrExt;
+use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 /// The most often how far the work has come is told.
@@ -39,26 +36,6 @@ const ENTRY_BYTES: u64 = 2048;
 /// The slot's partitions that start the phone and check what it starts, in
 /// the order a backup takes them: those the phone has.
 const BOOT: [&str; 8] = ["boot", "init_boot", "vendor_boot", "dtbo", "vbmeta", "vbmeta_system", "vbmeta_vendor", "recovery"];
-
-/// The partitions the bootloader chain lives in, in both slots, which
-/// [`Part::Firmware`] keeps and nothing here writes back. They are the
-/// phone's own copy of what starts it before any of the above: a phone that
-/// will not start at all is reached with fastboot or an EDL tool, not from
-/// here.
-pub const FIRMWARE: [&str; 23] = [
-    "xbl", "xbl_config", "abl", "tz", "hyp", "devcfg", "qupfw", "uefi", "uefisecapp", "aop", "aop_config", "cpucp", "cpucp_dtb", "shrm",
-    "xbl_ramdump", "pvmfw", "multiimgoem", "multiimgqti", "spuservice", "qweslicstore", "imagefv", "vm-bootsys", "featenabler",
-];
-
-/// Each of [`FIRMWARE`] on both slots, by the name the block device has,
-/// those the phone has.
-pub fn firmware_partitions() -> Vec<String> {
-    FIRMWARE
-        .iter()
-        .flat_map(|base| ["_a", "_b"].map(|suffix| format!("{base}{suffix}")))
-        .filter(|name| partition(name).exists())
-        .collect()
-}
 
 /// The order a restore writes the parts in: what starts the phone and what
 /// it starts, then the baseband's, then the data partition's files, which
@@ -104,7 +81,7 @@ pub fn data_skipped(phone: &[String]) -> Vec<String> {
 
 pub struct BackupTask {
     /// Which of [`Part::ALL`] to take.
-    pub parts: [bool; 5],
+    pub parts: [bool; 4],
     /// The folder of backups at the place chosen; this one goes into a
     /// folder of its own there, called `stamp`.
     pub into: PathBuf,
@@ -129,7 +106,7 @@ pub struct BackupTask {
 pub struct RestoreTask {
     pub folder: PathBuf,
     /// Which of [`Part::ALL`] to restore.
-    pub parts: [bool; 5],
+    pub parts: [bool; 4],
     pub device: String,
     pub skipped: Vec<String>,
     /// What has to happen before the slot's partitions in super are written
@@ -200,82 +177,58 @@ pub enum End {
 }
 
 pub struct Worker {
-    events: Receiver<Event>,
-    /// Readable while events wait.
-    wake: OwnedFd,
     cancel: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    /// The screen lets it go once the work has ended.
+    worker: skyward_sys::worker::Worker<Event>,
 }
 
 impl Worker {
     pub fn start(task: Task) -> Result<Worker> {
-        let mut fds = [0; 2];
-        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
-            return Err(io::Error::last_os_error()).context("make the backup worker's wake pipe");
-        }
-        let (wake, signal) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
-        let (tx, events) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let stop = cancel.clone();
-        let thread = thread::Builder::new()
-            .name("backup".into())
-            .spawn(move || {
-                let tell = |event: Event| {
-                    // The screen only stops listening once it has let the
-                    // worker go.
-                    let _ = tx.send(event);
-                    unsafe { libc::write(signal.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
-                };
-                let ended = match task {
-                    Task::Backup(t) => backup(t, &tell, &stop).map(End::Saved),
-                    Task::Restore(t) => restore(t, &tell, &stop).map(|unmade| End::Restored { unmade }),
-                };
-                let end = match ended {
-                    Ok(end) => end,
-                    Err(e) if e.is::<Cancelled>() => End::Stopped,
-                    Err(e) => match e.downcast::<Refusal>() {
-                        Ok(refusal) => End::Refused(refusal),
-                        Err(e) => End::Failed(format!("{e:#}")),
-                    },
-                };
-                let said = match &end {
-                    End::Saved(folder) => format!("backup saved in {}", folder.display()),
-                    End::Restored { unmade } => format!("backup restored, all but {unmade:?}"),
-                    End::Stopped => "backup stopped".into(),
-                    End::Refused(why) => format!("backup refused: {why}"),
-                    End::Failed(why) => format!("backup failed: {why}"),
-                };
-                skyward_sys::kmsg(&said).expect("the kernel log takes a line");
-                tell(Event::Ended(end));
-            })
-            .context("start the backup worker")?;
-        Ok(Worker { events, wake, cancel, thread: Some(thread) })
+        let worker = skyward_sys::worker::Worker::start("backup", move |teller| {
+            let tell = |event: Event| {
+                teller.tell(event);
+            };
+            let ended = match task {
+                Task::Backup(t) => backup(t, &tell, &stop).map(End::Saved),
+                Task::Restore(t) => restore(t, &tell, &stop).map(|unmade| End::Restored { unmade }),
+            };
+            let end = match ended {
+                Ok(end) => end,
+                Err(e) if e.is::<Cancelled>() => End::Stopped,
+                Err(e) => match e.downcast::<Refusal>() {
+                    Ok(refusal) => End::Refused(refusal),
+                    Err(e) => End::Failed(format!("{e:#}")),
+                },
+            };
+            let said = match &end {
+                End::Saved(folder) => format!("backup saved in {}", folder.display()),
+                End::Restored { unmade } => format!("backup restored, all but {unmade:?}"),
+                End::Stopped => "backup stopped".into(),
+                End::Refused(why) => format!("backup refused: {why}"),
+                End::Failed(why) => format!("backup failed: {why}"),
+            };
+            skyward_sys::kmsg(&said).expect("the kernel log takes a line");
+            tell(Event::Ended(end));
+        })?;
+        Ok(Worker { cancel, worker })
     }
 
+    /// Readable while events wait.
     pub fn fd(&self) -> RawFd {
-        self.wake.as_raw_fd()
+        self.worker.fd()
     }
 
     /// The events since the last call.
     pub fn events(&self) -> Vec<Event> {
-        let mut drain = [0u8; 64];
-        while unsafe { libc::read(self.wake.as_raw_fd(), drain.as_mut_ptr().cast(), drain.len()) } > 0 {}
-        self.events.try_iter().collect()
+        self.worker.events()
     }
 
     /// Ask the work to stop; it does between two chunks, and a restore
     /// only while nothing is written yet.
     pub fn stop(&self) {
         self.cancel.store(true, Ordering::Relaxed);
-    }
-}
-
-impl Drop for Worker {
-    /// The screen lets the worker go once its work has ended.
-    fn drop(&mut self) {
-        if let Some(thread) = self.thread.take() {
-            thread.join().expect("the backup worker does not panic");
-        }
     }
 }
 
@@ -340,18 +293,13 @@ fn copy(from: &mut impl Read, to: &mut impl Write, len: u64, cancel: &AtomicBool
 /// with, in hex.
 fn data_key() -> Result<String> {
     let bytes = fs::read(DATA_KEY).with_context(|| format!("read {DATA_KEY}"))?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(hex::encode(bytes))
 }
 
 /// The bytes free where `path` is, or would be made.
 fn free_bytes(path: &Path) -> Result<u64> {
     let there = path.ancestors().find(|p| p.exists()).context("the root is always there")?;
-    let c = std::ffi::CString::new(there.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", there.display()))?;
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-        return Err(io::Error::last_os_error()).with_context(|| format!("look at the room on {}", there.display()));
-    }
-    Ok(st.f_bavail as u64 * st.f_frsize as u64)
+    Ok(mount::space(there).with_context(|| format!("look at the room on {}", there.display()))?.available)
 }
 
 /// The slot's partitions in super are read or written whole only while no
@@ -366,7 +314,7 @@ fn no_update() -> Result<()> {
 
 fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<PathBuf> {
     let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
-    let [boot, system, data, efs, firmware] = t.parts;
+    let [boot, system, data, efs] = t.parts;
     if system {
         no_update()?;
     }
@@ -404,15 +352,6 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
             ensure!(device.exists(), "the phone has no partition {name}");
             let size = skyward_block::size_bytes(&device)?;
             plan.push((Part::Efs, name.clone(), Source::Block(device), size));
-        }
-    }
-    if firmware {
-        // Both slots, since which one starts the phone has changed before
-        // and can be changed back.
-        for name in firmware_partitions() {
-            let device = partition(&name);
-            let size = skyward_block::size_bytes(&device)?;
-            plan.push((Part::Firmware, name, Source::Block(device), size));
         }
     }
     // Compressed, what the files take is not known until they are written.
@@ -526,7 +465,7 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
         return Err(Refusal::OtherPhone(manifest.device).into());
     }
     let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
-    let mut items: Vec<&Item> = manifest.items.iter().filter(|i| t.parts[index(i.part)] && i.part.restorable()).collect();
+    let mut items: Vec<&Item> = manifest.items.iter().filter(|i| t.parts[index(i.part)]).collect();
     ensure!(!items.is_empty(), "nothing chosen to restore is in the backup");
     items.sort_by_key(|i| RESTORE_ORDER.iter().position(|&p| p == i.part));
     // All that can be seen before anything is written.
@@ -554,7 +493,6 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
                     return Err(Refusal::DataReset.into());
                 }
             }
-            Part::Firmware => bail!("the bootloader chain is kept, never put back"),
         }
     }
     tell(Event::Plan(items.iter().map(|i| (i.name.clone(), i.stored.size)).collect()));
@@ -606,7 +544,6 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
                 reader.check(&item.stored)?;
                 unmade = unpacked.unmade.iter().map(|u| Path::new(DATA).join(u)).collect();
             }
-            Part::Firmware => bail!("the bootloader chain is kept, never put back"),
         }
         skyward_sys::kmsg(&format!("restored {}", item.name))?;
     }
@@ -617,10 +554,7 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
 /// The partition a part of a backup goes back to.
 fn target(item: &Item, slot: Slot) -> PathBuf {
     match item.part {
-        // The name is the whole device name for both: the baseband's
-        // partitions carry no slot, and a kept bootloader partition carries
-        // its own.
-        Part::Efs | Part::Firmware => partition(&item.name),
+        Part::Efs => partition(&item.name),
         _ => partition(&format!("{}{}", item.name, slot.suffix())),
     }
 }

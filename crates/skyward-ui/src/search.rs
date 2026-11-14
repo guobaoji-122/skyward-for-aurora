@@ -30,12 +30,6 @@ const MOUNT: Text = ["挂载", "掛載", "Mount"];
 pub const ENTRIES: &[Entry] = &[
     entry(["WLAN", "Wi-Fi", "Wi-Fi"], HOME, Screen::Wlan, &["wuxianwangluo", "wxwl", "wangluo", "wl", "lianwang", "wifi", "wlan"]),
     entry(
-        ["LocalSend 文件传输", "LocalSend 檔案傳輸", "LocalSend file transfer"],
-        ["WLAN", "Wi-Fi", "Wi-Fi"],
-        Screen::LocalSend,
-        &["localsend", "ls", "wenjianhuchuan", "wjhc", "huchuan", "hc", "send", "receive"],
-    ),
-    entry(
         ["双系统", "雙系統", "Dual boot"],
         HOME,
         Screen::Systems,
@@ -64,18 +58,6 @@ pub const ENTRIES: &[Entry] = &[
         Screen::Filesystems,
         &["wenjianxitong", "wjxt", "genghuan", "gh", "fsck", "filesystem", "f2fs", "ext4"],
     ),
-    entry(
-        ["AVB 校验", "AVB 校驗", "AVB checks"],
-        ADVANCED,
-        Screen::Avb,
-        &["avb", "jiaoyan", "jy", "yanzheng", "yz", "verity", "verification", "vbmeta", "dmverity"],
-    ),
-    entry(
-        ["启动指令", "啟動指令", "Boot message"],
-        ADVANCED,
-        Screen::Bcb,
-        &["qidongzhiling", "qdzl", "zhiling", "zl", "bcb", "misc", "bootloader", "recoveryloop", "xunhuan"],
-    ),
     entry(["导出日志", "匯出記錄", "Export logs"], ADVANCED, Screen::Logs, &["daochurizhi", "dcrz", "rizhi", "rz", "logs", "dmesg"]),
     entry(
         ["系统更新", "系統更新", "System update"],
@@ -87,7 +69,6 @@ pub const ENTRIES: &[Entry] = &[
     entry(["深色模式", "深色模式", "Dark mode"], SETTINGS, Screen::Settings, &["shensemoshi", "ssms", "dark", "theme"]),
     entry(["屏幕亮度", "螢幕亮度", "Screen brightness"], SETTINGS, Screen::Settings, &["pingmuliangdu", "pmld", "liangdu", "ld", "brightness"]),
     entry(["息屏时间", "螢幕自動關閉", "Screen timeout"], SETTINGS, Screen::ScreenOff, &["xipingshijian", "xpsj", "timeout"]),
-    entry(["双击亮屏", "雙擊亮屏", "Double-tap to wake"], SETTINGS, Screen::Settings, &["shuangjiliangping", "sjlp", "doubletap", "wake"]),
     entry(["振动强度", "震動強度", "Vibration intensity"], SETTINGS, Screen::Settings, &["zhendongqiangdu", "zdqd", "qiangdu", "qd", "intensity", "strength"]),
     entry(["触摸振动", "觸控震動", "Touch vibration"], SETTINGS, Screen::Settings, &["chumozhendong", "cmzd", "zhendong", "vibrate", "haptic"]),
     entry(["文件传输", "檔案傳輸", "File transfer"], SETTINGS, Screen::Settings, &["wenjianchuanshu", "wjcs", "chuanshu", "mtp", "usb"]),
@@ -163,6 +144,43 @@ pub fn find(query: &str, l: Lang) -> Vec<&'static Entry> {
 /// a phone whose WLAN the recovery does not bring up has no WLAN page.
 pub fn find_on(query: &str, l: Lang, offers: impl Fn(Screen) -> bool) -> Vec<&'static Entry> {
     find(query, l).into_iter().filter(|e| offers(e.screen)).collect()
+}
+
+/// A name's pinyin initials, keeping Latin letters and digits.
+pub fn initials(name: &str) -> String {
+    use pinyin::ToPinyin;
+    let mut out = String::new();
+    for ch in name.chars() {
+        if let Some(py) = ch.to_pinyin() {
+            out.push_str(&py.first_letter().to_ascii_lowercase());
+        } else if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        }
+    }
+    out
+}
+
+fn plain(name: &str) -> String {
+    use pinyin::ToPinyin;
+    let mut out = String::new();
+    for ch in name.chars() {
+        if let Some(py) = ch.to_pinyin() {
+            out.push_str(py.plain());
+        } else if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        }
+    }
+    out
+}
+
+/// Whether a file name answers to what is typed, by its letters or by its
+/// Chinese name's pinyin and initials.
+pub fn file_matches(name: &str, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    name.to_lowercase().contains(&query) || initials(name).contains(&query) || plain(name).contains(&query)
 }
 
 #[cfg(test)]
