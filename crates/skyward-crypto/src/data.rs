@@ -42,54 +42,10 @@ const CIPHERS: [(&str, &str); 2] = [("aes-256-xts", "aes-xts-plain64"), ("adiant
 /// mapped in whole multiples of eight 512-byte sectors.
 const SECTORS_PER_UNIT: u64 = 8;
 
-/// How a phone says its data partition is encrypted: the cipher, and
-/// whether the key is one only the storage hardware can unwrap.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Encryption {
-    pub cipher: String,
-    pub wrapped: bool,
-}
-
-impl Encryption {
-    /// Read what an entry of the phone's own table says. Where it says
-    /// nothing about the partition being encrypted whole, the words every
-    /// build of this Android writes are taken instead: a build that turns
-    /// the encryption off leaves them out, and so does the table of the
-    /// other slot, which a recovery started from one slot reads while the
-    /// partition stays encrypted as the system of the other slot left it.
-    /// The words are read as the phone writes them and not as one build of
-    /// it writes them: the algorithm may be left out, the one left out
-    /// being the one every build uses, and the key may be said to be
-    /// wrapped in either of the two ways a phone says it.
-    pub fn of(entry: &Entry) -> Result<Encryption> {
-        let Some(said) = entry.extra("metadata_encryption") else {
-            return Ok(Encryption { cipher: CIPHERS[0].1.to_string(), wrapped: true });
-        };
-        let (name, rest) = said.split_once(':').unwrap_or((said, ""));
-        // The algorithm left out is the one every build of this Android
-        // uses, which is the first of the ones here.
-        let cipher = if name.is_empty() {
-            CIPHERS[0].1
-        } else {
-            CIPHERS
-                .iter()
-                .find_map(|(theirs, kernels)| (*theirs == name).then_some(*kernels))
-                .with_context(|| format!("no cipher here is the {name} the phone names"))?
-        };
-        // The key is wrapped in hardware when the phone says so in either
-        // of the two ways it says it.
-        let wrapped = rest.split('+').any(|flag| flag == "wrappedkey" || flag == "wrappedkey_v0");
-        Ok(Encryption { cipher: cipher.to_string(), wrapped })
-    }
-}
 
 /// Where vold keeps the key when the phone's table names no directory.
 const DEFAULT_KEY_DIR: &str = "/metadata/vold/metadata_encryption";
 
-/// Where the phone keeps the key for the filesystem an entry describes.
-pub fn key_dir(entry: &Entry) -> Result<PathBuf> {
-    Ok(Path::new(entry.extra("keydirectory").unwrap_or(DEFAULT_KEY_DIR)).join(KEY_DIR))
-}
 
 /// Unwrap the key the phone keeps for its data partition and give the
 /// storage hardware the form of it that lasts until the phone is started
@@ -681,15 +637,6 @@ fn secret_note(user: u32, synthetic_password: &[u8]) -> Result<Note> {
 
 /// Build the device-mapper target that reads the partition through the
 /// storage hardware's decryption.
-pub fn target(device: &str, sectors: u64, key: &[u8], encryption: &Encryption) -> Target {
-    Target::DefaultKey {
-        sectors: sectors - sectors % SECTORS_PER_UNIT,
-        device: device.to_string(),
-        cipher: encryption.cipher.clone(),
-        key: key.iter().map(|b| format!("{b:02x}")).collect(),
-        wrapped: encryption.wrapped,
-    }
-}
 
 #[cfg(test)]
 mod tests {

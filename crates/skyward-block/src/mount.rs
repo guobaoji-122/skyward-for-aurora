@@ -54,7 +54,7 @@ pub struct Visible {
     pub filesystem: String,
 }
 
-use std::path::Path;
+
 
 /// Whether the mount table's line for `path` says read-only, if it has one:
 /// `None` where nothing is mounted there. Later lines are mounts stacked
@@ -78,6 +78,32 @@ fn read_only_in(table: &str, path: &Path) -> Option<bool> {
     }
     found
 }
+
+pub struct Space {
+    pub total: u64,
+    pub free: u64,
+    pub available: u64,
+}
+
+/// The room in the filesystem that holds `path`.
+pub fn space(path: &Path) -> io::Result<Space> {
+    let s = statvfs(path)?;
+    // The counts are 32 bits on some hosts and 64 on the phone.
+    #[allow(clippy::useless_conversion)]
+    let (blocks, free, available, size) = (u64::from(s.f_blocks), u64::from(s.f_bfree), u64::from(s.f_bavail), u64::from(s.f_frsize));
+    Ok(Space { total: blocks * size, free: free * size, available: available * size })
+}
+
+/// What the kernel says of the filesystem that holds `path`.
+fn statvfs(path: &Path) -> io::Result<libc::statvfs> {
+    let c = CString::new(path.as_os_str().as_bytes()).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(s)
+}
+
 
 #[cfg(target_os = "android")]
 mod sys {

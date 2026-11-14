@@ -1099,7 +1099,7 @@ fn percent(share: f32) -> u32 {
 fn update_stage(l: Lang, stage: Option<&Stage>) -> (String, Option<f32>) {
     match stage {
         Some(Stage::Writing { done, total }) => {
-            let s = share(*done, *total);
+            let s = share(done, total);
             let p = percent(s);
             (tr!(l, "第 1 步，共 3 步：写入新系统 {p}%", "第 1 步，共 3 步：寫入新系統 {p}%", "Step 1 of 3: writing the new system {p}%"), Some(s))
         }
@@ -1161,7 +1161,7 @@ fn reflashed(c: &mut Canvas, cx: &Ctx, y: f32) -> f32 {
     match &cx.state.reflash {
         None => y,
         Some(Reflash::Written(written)) => {
-            let slots = fmt::slots(l, written);
+            let slots = fmt::slots(l, &written);
             let said = match (l, written.len()) {
                 (Lang::En, 1) => format!("Skyward went back into {slots}'s recovery partition."),
                 _ => tr!(l, "已将 Skyward 重新刷入{slots} 的 recovery 分区。", "已將 Skyward 重新刷入{slots} 的 recovery 分割區。", "Skyward went back into the recovery partitions of {slots}."),
@@ -1285,7 +1285,7 @@ pub fn installing(cx: &Ctx) -> Frame {
             widgets::footnote(&mut c, t, f, y, note)
         }
         Install::Checking { stage: Some(Stage::Signature { done, total }), .. } => {
-            let read = share(*done, *total);
+            let read = share(done, total);
             let p = percent(read);
             let detail = tr!(l, "已读取 {p}%", "已讀取 {p}%", "{p}% read");
             let y = widgets::progress_card(&mut c, t, f, top, l.pick(["正在验证签名", "正在驗證簽章", "Verifying the signature"]), &detail, Some(read));
@@ -1422,7 +1422,7 @@ pub fn installing(cx: &Ctx) -> Frame {
                 Some(Stage::Flashing { done, total }) => {
                     let s = share(*done, *total);
                     let p = percent(s);
-                    let detail = match done * 2 < *total {
+                    let detail = match done * 2 < total {
                         true => tr!(l, "正在写入 {p}%", "正在寫入 {p}%", "Writing {p}%"),
                         false => tr!(l, "正在校验 {p}%", "正在驗證 {p}%", "Verifying {p}%"),
                     };

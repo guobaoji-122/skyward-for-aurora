@@ -21,6 +21,16 @@ pub enum Sum {
 }
 
 /// Where a package is downloaded to until it is whole and checked.
+/// The bytes free for anyone to write in the filesystem `dir` is on.
+pub fn free(dir: &Path) -> Result<u64> {
+    let c = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).context("a path with a NUL")?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| format!("read the free space of {}", dir.display()));
+    }
+    Ok(s.f_bavail as u64 * s.f_frsize as u64)
+}
+
 pub fn partial(path: &Path) -> PathBuf {
     let mut name = path.file_name().expect("a package has a name").to_os_string();
     name.push(".part");

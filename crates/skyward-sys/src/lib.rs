@@ -464,9 +464,39 @@ pub fn runs_again() -> bool {
     RUNS_AGAIN.get().copied().unwrap_or(false)
 }
 
+const RECORD_OPENS: &str = "<6>skyward: ";
+const RECORD_MOST: usize = 1024 - 48;
+
+fn records(text: &str, most: usize) -> Vec<&str> {
+    let mut records = Vec::new();
+    for mut line in text.lines() {
+        while line.len() > most {
+            let mut end = most;
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            let (record, rest) = line.split_at(end);
+            records.push(record);
+            line = rest;
+        }
+        records.push(line);
+    }
+    if records.is_empty() {
+        records.push("");
+    }
+    records
+}
+
+fn written(text: &str) -> Vec<String> {
+    records(text, RECORD_MOST - RECORD_OPENS.len() - 1).into_iter().map(|record| format!("{RECORD_OPENS}{record}
+")).collect()
+}
+
 pub fn kmsg(line: &str) -> Result<()> {
     let mut f = OpenOptions::new().write(true).open("/dev/kmsg")?;
-    f.write_all(format!("<6>skyward: {line}\n").as_bytes())?;
+    for record in written(line) {
+        f.write_all(record.as_bytes())?;
+    }
     // The stamp is made once, so both files say the same thing. A clock that
     // cannot be read leaves the kernel log alone rather than failing the
     // call: what was written there is already written.
@@ -483,7 +513,7 @@ pub fn kmsg(line: &str) -> Result<()> {
             stop_lasting(&format!("the lasting log stopped: {e}"));
         }
     }
-    kept
+    Ok(())
 }
 
 /// Why something done over and over last failed, as the log was last told:
@@ -507,33 +537,9 @@ impl ToldOnce {
     }
 }
 
-/// What is written to the kernel log for `text`, a write for each record.
-fn written(text: &str) -> Vec<String> {
-    records(text, RECORD_MOST - RECORD_OPENS.len() - 1).into_iter().map(|record| format!("{RECORD_OPENS}{record}\n")).collect()
-}
 
-/// `text` as the records the kernel log takes it in: each of its lines,
-/// and a line of more than `most` bytes as several, cut where a character
-/// ends. Text without a line in it is one empty record.
-fn records(text: &str, most: usize) -> Vec<&str> {
-    let mut records = Vec::new();
-    for mut line in text.lines() {
-        while line.len() > most {
-            let mut end = most;
-            while !line.is_char_boundary(end) {
-                end -= 1;
-            }
-            let (record, rest) = line.split_at(end);
-            records.push(record);
-            line = rest;
-        }
-        records.push(line);
-    }
-    if records.is_empty() {
-        records.push("");
-    }
-    records
-}
+
+
 
 /// End the lasting copy's part in this session, saying once on the kernel
 /// log why. Nothing after this stands on the copy, so nothing after this

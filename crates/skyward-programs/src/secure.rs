@@ -383,6 +383,7 @@ fn started(phone: &Phone, program: &Program, ready: Ready, registers: Vec<String
         user: program.user.clone(),
         groups: program.groups.clone(),
         capabilities: program.capabilities.clone().unwrap_or_default(),
+        ..Service::default()
     };
     Started { service, sockets: program.sockets.clone(), environment: program.environment.clone(), anew: false }
 }

@@ -399,7 +399,7 @@ pub struct Partitions {
 /// A program from the phone's own partitions that the recovery keeps
 /// running, such as the touch processing of a panel that hands raw frames
 /// to the host.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct Service {
     pub path: String,
     /// Other paths the same service is known by on other builds of the
