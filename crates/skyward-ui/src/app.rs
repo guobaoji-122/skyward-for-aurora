@@ -1817,6 +1817,9 @@ pub enum Action {
     /// Change the full-mode page's zoom.
     BrowserZoomOut,
     BrowserZoomIn,
+    /// Scroll the plugin page up or down.
+    BrowserScrollUp,
+    BrowserScrollDown,
     /// Leave the plugin page and read the same address with the basic reader.
     BrowserBasic,
     /// Type into the page's focused field with the recovery keyboard.
@@ -2838,6 +2841,8 @@ pub enum Effect {
     BrowserPluginText(String),
     /// Reload the persistent full-mode page.
     BrowserPluginReload,
+    /// Scroll the persistent full-mode page.
+    BrowserPluginScroll { dy: i64 },
     /// Stop the full browser plugin.
     BrowserPluginStop,
     /// Take the full browser plugin away.
@@ -6960,6 +6965,14 @@ impl App {
                     self.state.browser.full_progress = Some(0.2);
                     self.refresh();
                     return vec![Effect::BrowserPluginPinch { scale: if up { 1.25 } else { 0.8 } }];
+                }
+            }
+            Action::BrowserScrollUp | Action::BrowserScrollDown => {
+                if self.state.browser.full_active {
+                    let dy = if matches!(action, Action::BrowserScrollDown) { 620 } else { -620 };
+                    self.state.browser.full_progress = Some(0.2);
+                    self.refresh();
+                    return vec![Effect::BrowserPluginScroll { dy }];
                 }
             }
             Action::BrowserBasic => {

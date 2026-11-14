@@ -3194,6 +3194,15 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                             Err(e) => app.browser_plugin_shot(Err(format!("{e:#}"))),
                         }
                     }
+                    Effect::BrowserPluginScroll { dy } => {
+                        if let Some(worker) = reader.take() {
+                            worker.stop();
+                        }
+                        match browser::Worker::start(browser::Task::FullScroll { dy }, servers.clone()) {
+                            Ok(worker) => reader = Some(worker),
+                            Err(e) => app.browser_plugin_shot(Err(format!("{e:#}"))),
+                        }
+                    }
                     Effect::BrowserPluginReload => {
                         if let Some(worker) = reader.take() {
                             worker.stop();

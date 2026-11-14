@@ -157,25 +157,28 @@ impl Cdp {
     }
 
     pub fn screenshot(&mut self) -> Result<Vec<u8>> {
-        let height = self.content_height();
         let answer = self.call(
             "Page.captureScreenshot",
-            json!({
-                "format": "jpeg",
-                "quality": 72,
-                "fromSurface": true,
-                "captureBeyondViewport": true,
-                "clip": {
-                    "x": 0.0,
-                    "y": 0.0,
-                    "width": VIEW_W as f64,
-                    "height": height,
-                    "scale": DEVICE_SCALE
-                }
-            }),
+            json!({"format": "jpeg", "quality": 82, "fromSurface": true}),
         )?;
         let data = answer["data"].as_str().context("screenshot holds no data")?;
         base64::engine::general_purpose::STANDARD.decode(data).context("decode screenshot")
+    }
+
+    pub fn scroll(&mut self, dy: i64) -> Result<()> {
+        self.call(
+            "Input.synthesizeScrollGesture",
+            json!({
+                "x": VIEW_W / 2,
+                "y": VIEW_H / 2,
+                "xDistance": 0,
+                "yDistance": dy,
+                "speed": 900,
+                "gestureSourceType": "touch"
+            }),
+        )?;
+        std::thread::sleep(Duration::from_millis(500));
+        Ok(())
     }
 }
 

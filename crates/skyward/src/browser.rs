@@ -41,6 +41,7 @@ pub enum Task {
     FullTap { x: u16, y: u16 },
     FullPinch { scale: f64 },
     FullText { text: String },
+    FullScroll { dy: i64 },
     FullReload,
     FullStop,
 }
@@ -351,7 +352,9 @@ impl Worker {
                     }
                     Task::FullTap { x, y } => {
                         let result = Cdp::connect().and_then(|mut cdp| {
-                            cdp.touch_page(x as u32, y as u32)?;
+                            let cx = (x as u32 * crate::cdp::WIDTH / 1000).min(crate::cdp::WIDTH - 1);
+                            let cy = (y as u32 * crate::cdp::HEIGHT / 1000).min(crate::cdp::HEIGHT - 1);
+                            cdp.touch(cx, cy)?;
                             Ok(full_result(&mut cdp))
                         });
                         match result {
@@ -390,6 +393,22 @@ impl Worker {
                             Ok((png, _focus)) => {
                                 tell(Event::Shot(png));
                                 tell(Event::Focus(false));
+                            }
+                            Err(e) => {
+                                stop_full();
+                                tell(Event::Shot(Err(format!("{e:#}"))));
+                            }
+                        }
+                    }
+                    Task::FullScroll { dy } => {
+                        let result = Cdp::connect().and_then(|mut cdp| {
+                            cdp.scroll(dy)?;
+                            Ok(full_result(&mut cdp))
+                        });
+                        match result {
+                            Ok((png, focus)) => {
+                                tell(Event::Shot(png));
+                                tell(Event::Focus(focus));
                             }
                             Err(e) => {
                                 stop_full();

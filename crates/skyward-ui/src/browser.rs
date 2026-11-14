@@ -378,7 +378,7 @@ fn dock(cx: &Ctx) -> Dock {
 }
 
 fn full_dock(cx: &Ctx) -> Dock {
-    dock_with(cx, &[Action::BrowserBack, Action::BrowserForward, Action::BrowserReload, Action::BrowserKeyboard, Action::BrowserZoomOut, Action::BrowserZoomIn, Action::BrowserHome])
+    dock_with(cx, &[Action::BrowserBack, Action::BrowserForward, Action::BrowserReload, Action::BrowserKeyboard, Action::BrowserScrollUp, Action::BrowserScrollDown, Action::BrowserZoomOut, Action::BrowserZoomIn, Action::BrowserHome])
 }
 
 fn dock_with(cx: &Ctx, actions: &[Action]) -> Dock {
@@ -424,6 +424,13 @@ fn dock_with(cx: &Ctx, actions: &[Action]) -> Dock {
                     c.line(x, cy0 - m.dp(2.0), x, cy0 + m.dp(1.0), m.dp(1.3), ink);
                 }
                 c.line(cx0 - m.dp(5.0), cy0 + m.dp(4.0), cx0 + m.dp(5.0), cy0 + m.dp(4.0), m.dp(1.5), ink);
+            }
+            Action::BrowserScrollUp | Action::BrowserScrollDown => {
+                let up = action == &Action::BrowserScrollUp;
+                let (y0, y1) = if up { (m.dp(3.0), m.dp(-7.0)) } else { (m.dp(-3.0), m.dp(7.0)) };
+                c.line(cx0, cy0 + y0, cx0, cy0 + y1, m.dp(2.2), ink);
+                c.line(cx0 - m.dp(5.0), cy0 + y1 - if up { -m.dp(4.0) } else { m.dp(4.0) }, cx0, cy0 + y1, m.dp(2.2), ink);
+                c.line(cx0 + m.dp(5.0), cy0 + y1 - if up { -m.dp(4.0) } else { m.dp(4.0) }, cx0, cy0 + y1, m.dp(2.2), ink);
             }
             Action::BrowserZoomIn | Action::BrowserZoomOut => {
                 c.stroke_round_rect(cx0 - m.dp(9.0), cy0 - m.dp(9.0), m.dp(18.0), m.dp(18.0), m.dp(9.0), m.dp(2.0), ink);

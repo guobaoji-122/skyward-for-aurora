@@ -16,9 +16,11 @@ export SSL_CERT_DIR=/etc/ssl/certs
 : > /tmp/chromium.log
 if [ "${2:-}" = "serve" ]; then
   rm -rf /tmp/chromium-profile
+  GPU=--disable-gpu
+  [ -f /use-gpu ] && GPU="--enable-gpu --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader"
   UA="Mozilla/5.0 (Linux; Android 14; 23127PN0CC) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36"
   exec /usr/lib/chromium/chromium \
-    --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+    --headless=new --no-sandbox --disable-dev-shm-usage $GPU \
     --no-first-run --no-default-browser-check --disable-background-networking \
     --ignore-certificate-errors --disable-quic --disable-dns-prefetch \
     --disable-features=AsyncDns --hide-scrollbars \
