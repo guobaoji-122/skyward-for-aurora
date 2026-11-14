@@ -17,3 +17,7 @@ TODO.md
 notes/
 pr-patches/
 .cargo/
+# The recipe this machine builds with, and what it leaves behind: a local
+# toolchain recipe that names paths only this computer has, and the logs
+# of a build that was run here.
+*.log

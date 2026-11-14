@@ -1,4 +1,6 @@
 use crate::backup;
+use crate::browser;
+use crate::magisk;
 use crate::decrypt::{self, Decryptor};
 use crate::filework;
 use crate::haptics::Haptics;
@@ -361,7 +363,7 @@ fn in_place(place: Place, path: &str) -> PathBuf {
 /// what update_engine wrote while it last installed an update and what the
 /// last install script wrote, and the kernel's. Each file is owned as a
 /// copy into the folder would be. Gives the folder.
-fn export_logs(recovery: bool, kernel: bool, into: &Path, zone: usize) -> Result<PathBuf> {
+fn export_logs(recovery: bool, kernel: bool, browser: bool, full: bool, into: &Path, zone: usize) -> Result<PathBuf> {
     let there = into.ancestors().find(|p| p.exists()).context("the root is always there")?;
     let ownership = ownership(there)?;
     let folder = into.join(skyward_ui::fmt::stamp(unix_now()?, zone));
@@ -384,6 +386,26 @@ fn export_logs(recovery: bool, kernel: bool, into: &Path, zone: usize) -> Result
     }
     if kernel {
         save("kernel.log", skyward_sys::kernel_log()?.as_bytes())?;
+    }
+    if browser {
+        let path = Path::new(skyward_sys::RUN).join("browser.log");
+        match fs::read(&path) {
+            Ok(log) => save("browser-basic.log", &log)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                save("browser-basic.log", b"No basic browser activity in this recovery session.\n")?
+            }
+            Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+        }
+    }
+    if full {
+        let path = Path::new("/data/media/0/Skyward/plugins/chromium/tmp/chromium.log");
+        match fs::read(path) {
+            Ok(log) => save("browser-full.log", &log)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                save("browser-full.log", b"No full-mode Chromium log is present.\n")?
+            }
+            Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+        }
     }
     Ok(folder)
 }

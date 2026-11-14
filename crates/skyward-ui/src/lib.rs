@@ -1,7 +1,9 @@
 pub mod aod;
 pub mod app;
 pub mod blur;
+pub mod browser;
 pub mod doubletap;
+pub mod magisk;
 pub mod powermenu;
 pub mod canvas;
 pub mod charge;
@@ -16,6 +18,7 @@ pub mod geom;
 pub mod glow;
 pub mod icons;
 pub mod lang;
+pub mod magisk;
 pub mod motion;
 pub mod pages;
 pub mod search;
