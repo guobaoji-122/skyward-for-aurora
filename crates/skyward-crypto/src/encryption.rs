@@ -40,7 +40,12 @@ impl Encryption {
 
 /// Where the phone keeps the key for the filesystem an entry describes.
 pub fn key_dir(entry: &Entry) -> Result<PathBuf> {
-    let dir = entry.extra("keydirectory").context("the phone says where the key for its data partition is not")?;
+    // Where the table names no directory, the words every build writes
+    // are taken instead: a build that turns the encryption off leaves
+    // them out, and so does the table of the other slot.
+    let dir = entry
+        .extra("keydirectory")
+        .unwrap_or("/metadata/vold/metadata_encryption");
     Ok(Path::new(dir).join(KEY_DIR))
 }
 

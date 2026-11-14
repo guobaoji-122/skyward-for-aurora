@@ -90,6 +90,10 @@ impl App {
         let left = self.screen();
         match left {
             Screen::Mount => self.state.mount_failure = None,
+            // What the AVB page showed is dropped; the bootloader message
+            // page's take-away outcome is dropped with it.
+            Screen::Avb => self.state.avb_result = None,
+            Screen::Bcb => self.state.starter_cleared = None,
             // A slot picked and not switched to is put down.
             Screen::Slot => self.state.next_slot = None,
             // So is a system; the page stays while the boot partitions are
@@ -288,6 +292,8 @@ impl App {
             Screen::Filesystems => vec![Effect::ReadFilesystems],
             Screen::Slot | Screen::Reboot => vec![Effect::ReadSlots],
             Screen::Systems => vec![Effect::ReadSystems],
+            Screen::Avb => vec![Effect::ReadAvb],
+            Screen::Bcb => vec![Effect::ReadStarter],
             Screen::Restore => vec![self.find_backups()],
             Screen::Files => vec![Effect::ReadDir(self.state.files.path.clone())],
             Screen::Choose(place) if self.state.place_open(place) => vec![Effect::ReadPlace(place, self.state.folder(s).path.clone())],

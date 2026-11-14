@@ -12,7 +12,10 @@ pub enum Slider {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Switch {
+pub enum Switch {    AlwaysOn,
+    DoubleTap,
+    LocalSend,
+
     Vibrate,
     /// Offer internal storage to a computer over USB.
     FileTransfer,

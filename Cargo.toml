@@ -30,7 +30,7 @@ members = [
 # Upstream's number, raised for what this fork adds: the bootloader message
 # page, the log kept where it outlasts a restart, the backup of the
 # bootloader chain, a queue of packages, and a keyboard that is felt.
-version = "0.3.4"
+version = "0.3.1"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
