@@ -475,6 +475,17 @@ fn read(cx: &Ctx, article: &WebPage) -> Frame {
     let bar = address_bar(&mut c, cx, top, &article.url);
     out.push(Hit { rect: rect_bar(cx, top), action: Action::BrowserAddress });
     let header = article_head(&mut c, cx, article, bar + m.dp(12.0));
+    let header = if article.scripts {
+        let row = Row::new(l.pick(["此页面含 JavaScript", "此頁面含 JavaScript", "This page uses JavaScript"]))
+            .subtitle(l.pick(["使用完整模式加载脚本页面", "使用完整模式載入指令碼頁面", "Open it in full mode"]))
+            .icon(PURPLE, Icon::Layers)
+            .trail(Trail::Arrow);
+        let list = widgets::list(&mut c, t, cx.f, header, &[row]);
+        out.extend(hits(&list.rows, &[Action::BrowserFullLoad]));
+        list.bottom
+    } else {
+        header
+    };
     let mut edges = vec![header.round()];
     for block in &article.blocks {
         let h = block_height(&c, cx, block);
@@ -506,7 +517,13 @@ fn read(cx: &Ctx, article: &WebPage) -> Frame {
     out.extend(rows);
     let mut frame = Frame::new(t, c, out, l.pick(BROWSER), top);
     frame.rows = Some(Rows { edges, action: None });
-    frame.dock = Some(dock(cx));
+    if cx.state.browser.field.is_some() {
+        let (sheet, caret) = form_sheet(cx);
+        frame.dock = Some(sheet);
+        frame.caret = Some(caret);
+    } else {
+        frame.dock = Some(dock(cx));
+    }
     frame
 }
 
@@ -839,6 +856,45 @@ pub fn downloads(cx: &Ctx) -> Frame {
     ]);
     y = widgets::footnote(&mut c, t, f, y + m.card_gap, note);
     Frame::new(t, fit(c, t, y), out, l.pick(DOWNLOADS), top)
+}
+
+/// The field and keyboard that rise over the page, rather than a page of
+/// their own.
+fn form_sheet(cx: &Ctx) -> (Dock, widgets::Caret) {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let m = &t.m;
+    let (form, field) = s.browser.field.expect("the sheet has a field");
+    let label = s
+        .browser
+        .page()
+        .and_then(|p| p.forms.get(form))
+        .and_then(|f| f.fields.get(field))
+        .map(|f| if f.label.is_empty() { f.name.clone() } else { f.label.clone() })
+        .unwrap_or_default();
+    let value = s.browser.form.get(form).and_then(|v| v.get(field)).cloned().unwrap_or_default();
+    let keys = widgets::keyboard_height(t);
+    let h = keys + m.dp(92.0);
+    let mut c = Canvas::new(m.w, h.ceil() as u32);
+    c.clear(t.pal.bg);
+    c.fill_round_rect(m.margin, m.dp(8.0), m.w as f32 - m.margin * 2.0, m.dp(70.0), m.dp(18.0), t.pal.card);
+    c.text_top(&f.label, &label, m.margin + m.dp(18.0), m.dp(18.0), m.dp(13.0), t.pal.subtitle, None);
+    let close = Rect::new(m.w as f32 - m.margin - m.dp(36.0), m.dp(18.0), m.dp(28.0), m.dp(28.0));
+    c.line(close.x + m.dp(6.0), close.y + m.dp(6.0), close.x + close.w - m.dp(6.0), close.y + close.h - m.dp(6.0), m.dp(2.0), t.pal.subtitle);
+    c.line(close.x + close.w - m.dp(6.0), close.y + m.dp(6.0), close.x + m.dp(6.0), close.y + close.h - m.dp(6.0), m.dp(2.0), t.pal.subtitle);
+    let (_, caret) = widgets::text_field(&mut c, t, f, m.dp(40.0), &value);
+    let mut out = vec![
+        Hit {
+            rect: Rect::new(m.margin, m.dp(8.0), m.w as f32 - m.margin * 2.0, m.dp(70.0)),
+            action: Action::BrowserFormField(form, field),
+        },
+        Hit {
+            rect: Rect::new(m.w as f32 - m.margin - m.dp(36.0), m.dp(18.0), m.dp(28.0), m.dp(28.0)),
+            action: Action::BrowserFormClose,
+        },
+    ];
+    let keys = widgets::keyboard(&mut c, t, f, l, m.dp(92.0), s.layer, s.key_held(), l.pick(GO));
+    out.extend(keys.into_iter().map(|(rect, cap)| Hit { rect, action: Action::Type(cap) }));
+    (Dock { canvas: c, hits: out }, caret)
 }
 
 /// One field of a page's form, typed on the keyboard.

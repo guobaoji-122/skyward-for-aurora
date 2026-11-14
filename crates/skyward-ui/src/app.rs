@@ -1884,7 +1884,9 @@ pub enum Action {
     /// Type into the page's form field `field` of form `form`.
     BrowserFormField(usize, usize),
     /// Send the page's form `i`.
-    BrowserFormSubmit(usize),    /// Show the optional full browser plugin.
+    BrowserFormSubmit(usize),
+    /// Close the field sheet over the page.
+    BrowserFormClose,    /// Show the optional full browser plugin.
     BrowserFull,
     /// Download and unpack the full browser plugin.
     BrowserPluginInstall,
@@ -6272,6 +6274,7 @@ impl App {
         let url = f.action.clone();
         let post = f.post;
         let cookie = self.browser_cookie(&url);
+        self.state.browser.field = None;
         self.state.browser.view = BrowserView::Loading(url.clone());
         self.refresh();
         let _ = (l, now);
@@ -6548,6 +6551,11 @@ impl App {
             // The system's back goes through the pages read before leaving
             // the browser, as its own back button does.
             Screen::Browser => {
+                if self.state.browser.field.is_some() {
+                    self.state.browser.field = None;
+                    self.refresh();
+                    return Vec::new();
+                }
                 if self.state.browser.at > 0 {
                     let at = self.state.browser.at;
                     return self.browser_step(at - 1, now);
@@ -7080,7 +7088,11 @@ impl App {
                 }
                 b.field = Some((form, field));
                 self.state.layer = Layer::Letters;
-                self.open(Screen::BrowserForm);
+                self.refresh();
+            }
+            Action::BrowserFormClose => {
+                self.state.browser.field = None;
+                self.refresh();
             }
             Action::BrowserFormSubmit(form) => return self.browser_submit(form, now),
             Action::BrowserFull => {
@@ -7863,6 +7875,10 @@ impl App {
                 let (form, field) = self.state.browser.field.expect("the form page has a field");
                 &mut self.state.browser.form[form][field]
             }
+            Screen::Browser if self.state.browser.field.is_some() => {
+                let (form, field) = self.state.browser.field.expect("the form field is chosen");
+                &mut self.state.browser.form[form][field]
+            }
             s => panic!("{s:?} has no text field"),
         }
     }
@@ -8111,6 +8127,10 @@ impl App {
                 Screen::BrowserForm => {
                     let (form, _) = self.state.browser.field.expect("the form page has a field");
                     self.back(now);
+                    return self.browser_submit(form, now);
+                }
+                Screen::Browser if self.state.browser.field.is_some() => {
+                    let (form, _) = self.state.browser.field.expect("the field is chosen");
                     return self.browser_submit(form, now);
                 }
                 // So is a name no network can have; the keyboard then types

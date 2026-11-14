@@ -141,6 +141,9 @@ pub struct Page {
     pub description: Option<String>,
     pub blocks: Vec<Block>,
     pub forms: Vec<Form>,
+    /// The page carried scripts, so a reader without JavaScript sees only
+    /// its initial HTML.
+    pub scripts: bool,
     /// The cookies the answer set.
     pub cookies: Vec<Cookie>,
     /// The page was longer than [`MAX_PAGE`], or held more blocks than
@@ -616,6 +619,7 @@ fn plain_page(url: &str, text: &str, truncated: bool) -> Page {
         blocks,
         forms: Vec::new(),
         cookies: Vec::new(),
+        scripts: false,
         truncated,
     }
 }
@@ -662,6 +666,7 @@ fn rss_page(url: &str, text: &str, truncated: bool) -> Page {
         blocks,
         forms: Vec::new(),
         cookies: Vec::new(),
+        scripts: false,
         truncated: truncated || n >= 30,
     };
     if page.blocks.is_empty() {
@@ -813,6 +818,8 @@ struct Parser {
     style: Style,
     /// The page's own stylesheet.
     rules: Vec<CssRule>,
+    /// A `<script>` was met.
+    scripts: bool,
     /// The forms read, and the one being read.
     forms: Vec<Form>,
     form: Option<usize>,
@@ -841,6 +848,7 @@ impl Parser {
             title_tag: false,
             link: None,
             skip: None,
+            scripts: false,
             style: Style::default(),
             rules: Vec::new(),
             forms: Vec::new(),
@@ -919,7 +927,11 @@ impl Parser {
             return;
         }
         match name {
-            "script" | "style" | "noscript" | "template" | "svg" | "iframe" | "canvas" | "nav" | "footer" | "aside" | "select"
+            "script" => {
+                self.scripts = true;
+                self.skip = Some(name.to_string());
+            }
+            "style" | "noscript" | "template" | "svg" | "iframe" | "canvas" | "nav" | "footer" | "aside" | "select"
             | "option" | "textarea" => {
                 self.skip = Some(name.to_string());
             }
@@ -1209,6 +1221,7 @@ impl Parser {
             blocks: std::mem::take(&mut self.blocks),
             forms: std::mem::take(&mut self.forms),
             cookies: Vec::new(),
+            scripts: self.scripts,
             truncated: cut || self.truncated,
         }
     }
