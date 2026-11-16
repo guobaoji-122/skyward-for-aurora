@@ -560,10 +560,10 @@ impl ToldOnce {
 /// fails for it; the lines the session goes on making stay in [`LOG`].
 fn stop_lasting(why: &str) {
     LONG_STOPPED.store(true, Ordering::Relaxed);
-    if let Some(held) = KEPT_LONG.get() {
-        if let Ok(mut held) = held.lock() {
-            *held = None;
-        }
+    if let Some(held) = KEPT_LONG.get()
+        && let Ok(mut held) = held.lock()
+    {
+        *held = None;
     }
     note(&format!("{why}; the session's lines stay in {LOG}"));
 }
