@@ -1382,9 +1382,6 @@ dependencies = [
 [[package]]
 name = "jpeg-decoder"
 version = "0.3.2"
-dependencies = [
- "rayon",
-]
 
 [[package]]
 name = "js-sys"

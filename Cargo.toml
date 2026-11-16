@@ -1,5 +1,9 @@
 [workspace]
 resolver = "3"
+# These are vendored third-party crates kept for offline builds. They are
+# path dependencies, not workspace members: their upstream lints (old cfg
+# values, clippy style suggestions) must not fail our -D warnings CI.
+exclude = ["vendor-jpeg", "vendor-pinyin"]
 members = [
     "crates/skyward",
     "crates/skyward-config",
