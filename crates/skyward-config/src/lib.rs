@@ -819,9 +819,9 @@ mod tests {
             cfg.services.iter().filter(|s| s.runs_on(&props)).map(|s| s.path.clone()).collect()
         };
         let leica = runs(&[("ro.special_edition", "true")]);
-        assert_eq!(leica.len(), 8);
+        assert_eq!(leica.len(), 1, "this build keeps only its shell service");
         let plain = runs(&[]);
-        assert_eq!(plain.len(), 6);
+        assert_eq!(plain.len(), 1);
         assert!(!plain.iter().any(|p| p.starts_with("/odm/")), "the other builds' weaver cannot run in a recovery");
         assert_eq!(runs(&[("ro.special_edition", "false")]), plain);
     }
@@ -1051,7 +1051,7 @@ mod tests {
     #[test]
     fn services_use_the_partitions_they_run_from() {
         let cfg = DeviceConfig::parse(include_str!("../../../devices/disabled/ishtar.toml")).unwrap();
-        let [report, sensor, _listeners, ..] = &cfg.services[..] else { panic!("ishtar keeps several programs running") };
+        let [report, sensor, ..] = &cfg.services[..] else { panic!("ishtar keeps its touch programs running") };
         assert!(report.uses(Path::new("/odm")));
         assert!(sensor.uses(Path::new("/odm")));
         assert!(!report.uses(Path::new("/odm_dlkm")), "a longer name is another partition");
