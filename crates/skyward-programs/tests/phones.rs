@@ -204,6 +204,7 @@ fn nezha_s_programs_are_found_as_they_were_started_on_the_phone() {
         Started::from(Service {
             ready_service: Some("android.hardware.secure_element.ISecureElement/eSE2".into()),
             registers: strings(&["vendor.goodix.hardware.secure_element_aidl.IGdxEse/default"]),
+            optional: true,
             ..program("/odm/bin/hw/android.hardware.secure_element-service-goodix", &ON_ODM, "system", &["system"])
         }),
         Started::from(Service {
@@ -244,6 +245,7 @@ fn nezha_s_other_builds_reach_their_weaver_s_secure_element_through_the_secure_e
         // NFC service stays that program's to register.
         let own = Service {
             ready_service: Some("android.hardware.secure_element.ISecureElement/eSE1".into()),
+            optional: true,
             ..program("/vendor/bin/hw/android.hardware.secure_element-service.qti", &ON_VENDOR, "system", &["nfc", "system"])
         };
         assert_eq!(**element, Started::from(own));
@@ -336,6 +338,7 @@ fn dada_s_weaver_goes_through_the_secure_element_service_to_the_element_s_own_se
     assert_eq!(*at("/vendor/bin/hw/android.hardware.gatekeeper-service-qti"), &Started::from(credentials));
     let element = Service {
         ready_service: Some("android.hardware.secure_element.ISecureElement/eSE1".into()),
+        optional: true,
         ..program("/vendor/bin/hw/android.hardware.secure_element-service.qti", &ON_VENDOR, "system", &["nfc", "system"])
     };
     assert_eq!(*at("/vendor/bin/hw/android.hardware.secure_element-service.qti"), &Started::from(element));
