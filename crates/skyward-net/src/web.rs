@@ -455,11 +455,10 @@ fn fetch_images(agent: &ureq::Agent, page: &mut Page) {
     const ALL: usize = 2 << 20;
     let mut wanted = Vec::new();
     for (i, block) in page.blocks.iter().enumerate() {
-        if let Block::Image { url, data: None, .. } = block {
-            if readable_url(url) && wanted.len() < MOST {
+        if let Block::Image { url, data: None, .. } = block
+            && readable_url(url) && wanted.len() < MOST {
                 wanted.push((i, url.clone()));
             }
-        }
     }
     let mut total = 0;
     for (i, url) in wanted {
@@ -546,13 +545,12 @@ pub fn save(
         progress(Saving { done, total });
     }
     file.sync_all().with_context(|| format!("write {} through", part.display()))?;
-    if let Some(total) = total {
-        if done != total {
+    if let Some(total) = total
+        && done != total {
             drop(file);
             let _ = fs::remove_file(&part);
             bail!("the server sent {done} of {total} bytes");
         }
-    }
     fs::rename(&part, path).with_context(|| format!("name {} {}", part.display(), path.display()))?;
     Ok(done)
 }
@@ -585,7 +583,7 @@ fn disposition_name(response: &ureq::http::Response<ureq::Body>) -> Option<Strin
         if let Some(rest) = part.strip_prefix("filename=") {
             let name = rest.trim().trim_matches('"');
             if !name.is_empty() {
-                fallback = Some(sanitize_name(&name));
+                fallback = Some(sanitize_name(name));
             }
         }
     }
@@ -750,11 +748,10 @@ pub fn parse(url: &str, html: &str, truncated: bool) -> Page {
     let content = body_of(html);
     let mut p = Parser::new(url);
     p.rules = css_rules(html);
-    if let Some(href) = base_href(html) {
-        if let Some(base) = absolute(url, &href) {
+    if let Some(href) = base_href(html)
+        && let Some(base) = absolute(url, &href) {
             p.base = base;
         }
-    }
     let mut rest = content;
     while !rest.is_empty() {
         if let Some(tag) = p.skip_tag() {
@@ -970,20 +967,17 @@ impl Parser {
             "title" => self.title_tag = true,
             "meta" => {
                 let key = attr(attrs, "name").or_else(|| attr(attrs, "property")).unwrap_or_default();
-                if key.eq_ignore_ascii_case("description") || key.eq_ignore_ascii_case("og:description") {
-                    if let Some(content) = attr(attrs, "content") {
-                        if !content.trim().is_empty() {
+                if (key.eq_ignore_ascii_case("description") || key.eq_ignore_ascii_case("og:description"))
+                    && let Some(content) = attr(attrs, "content")
+                        && !content.trim().is_empty() {
                             self.description = Some(content.trim().to_string());
                         }
-                    }
-                }
             }
             "base" => {
-                if let Some(href) = attr(attrs, "href") {
-                    if let Some(base) = absolute(&self.base, &href) {
+                if let Some(href) = attr(attrs, "href")
+                    && let Some(base) = absolute(&self.base, &href) {
                         self.base = base;
                     }
-                }
             }
             "br" => self.text(" "),
             "p" | "div" | "section" | "article" | "main" | "header" | "form" | "fieldset"
@@ -1037,8 +1031,8 @@ impl Parser {
             }
             "img" => {
                 let style = self.style_for(name, attrs);
-                if let Some(src) = attr(attrs, "src") {
-                    if let Some(url) = absolute(&self.base, &src) {
+                if let Some(src) = attr(attrs, "src")
+                    && let Some(url) = absolute(&self.base, &src) {
                         let alt = attr(attrs, "alt").unwrap_or_default().trim().to_string();
                         let width = attr(attrs, "width").and_then(|w| w.parse().ok()).unwrap_or(0);
                         let height = attr(attrs, "height").and_then(|h| h.parse().ok()).unwrap_or(0);
@@ -1046,7 +1040,6 @@ impl Parser {
                             self.blocks.push(Block::Image { alt, url, data: None, width, height, style });
                         }
                     }
-                }
             }
             "input" => self.input(attrs),
             "button" => {
@@ -1083,14 +1076,12 @@ impl Parser {
             "a" => {
                 if let Some((href, label)) = self.link.take() {
                     let label = collapse(&label);
-                    if !label.is_empty() {
-                        if let Some(url) = absolute(&self.base, &href) {
-                            if url != self.base {
+                    if !label.is_empty()
+                        && let Some(url) = absolute(&self.base, &href)
+                            && url != self.base {
                                 let download = download_name(&url).is_some();
                                 self.blocks.push(Block::Link { label, url, download, style: self.style });
                             }
-                        }
-                    }
                 }
             }
             "form" => self.form_end(),
@@ -1199,14 +1190,12 @@ impl Parser {
     fn flush(&mut self) {
         if let Some((href, label)) = self.link.take() {
             let label = collapse(&label);
-            if !label.is_empty() {
-                if let Some(url) = absolute(&self.base, &href) {
-                    if url != self.base {
+            if !label.is_empty()
+                && let Some(url) = absolute(&self.base, &href)
+                    && url != self.base {
                         let download = download_name(&url).is_some();
                         self.blocks.push(Block::Link { label, url, download, style: self.style });
                     }
-                }
-            }
         }
         let text = collapse(&self.text);
         self.text.clear();

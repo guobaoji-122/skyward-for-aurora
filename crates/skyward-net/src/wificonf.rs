@@ -314,11 +314,10 @@ fn unquote(value: &str) -> Vec<u8> {
     if let Some(inner) = t.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
         return inner.as_bytes().to_vec();
     }
-    if let Some(hex) = t.strip_prefix("0x") {
-        if let Ok(b) = crate::supplicant::unescape(hex) {
+    if let Some(hex) = t.strip_prefix("0x")
+        && let Ok(b) = crate::supplicant::unescape(hex) {
             return b;
         }
-    }
     t.as_bytes().to_vec()
 }
 

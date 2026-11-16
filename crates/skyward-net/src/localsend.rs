@@ -207,13 +207,12 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+        if bytes[i] == b'%' && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
                 out.push(hi << 4 | lo);
                 i += 3;
                 continue;
             }
-        }
         // A '+' in a query means a space, as forms use.
         out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
         i += 1;
@@ -417,17 +416,15 @@ fn info(shared: &Arc<Mutex<Shared>>) -> Reply {
 fn register<R: Read>(shared: &Arc<Mutex<Shared>>, _peer: IpAddr, req: &Request, body: &mut Body<R>) -> Reply {
     if req.content_length > 0 && req.content_length < 1 << 16 {
         let mut buf = Vec::new();
-        if body.read_to_end(&mut buf).is_ok() {
-            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&buf) {
-                if let Some(alias) = v.get("alias").and_then(|a| a.as_str()) {
+        if body.read_to_end(&mut buf).is_ok()
+            && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&buf)
+                && let Some(alias) = v.get("alias").and_then(|a| a.as_str()) {
                     let mut s = shared.lock().expect("localsend state is not poisoned");
                     let alias = alias.to_string();
                     s.status.peers.retain(|p| p != &alias);
                     s.status.peers.insert(0, alias);
                     s.status.peers.truncate(12);
                 }
-            }
-        }
     }
     info(shared)
 }
@@ -529,13 +526,12 @@ fn upload<R: Read>(shared: &Arc<Mutex<Shared>>, peer: IpAddr, req: &Request, bod
         }
         out
     };
-    if let Some(wanted) = &sha256 {
-        if !wanted.eq_ignore_ascii_case(&sum) {
+    if let Some(wanted) = &sha256
+        && !wanted.eq_ignore_ascii_case(&sum) {
             let _ = fs::remove_file(&path);
             clear_progress(shared);
             return Ok(json_status(422, "checksum mismatch"));
         }
-    }
 
     // Keep the session until it is cancelled or a new one replaces it, but
     // mark this file done and tell the screen it arrived.
