@@ -113,8 +113,9 @@ mod tests {
         assert_eq!(frame.hits[1].action, Action::MountToggle(1));
         let held_row = app.act(Action::MountToggle(0), 0);
         assert_eq!(held_row, vec![Effect::Unmount("odm".into())]);
-        app.tick(1000);
-        assert_eq!(app.deadline(1000), Some(TOAST_MS), "it says why");
+        // The toast comes back from the runtime as set_mount_failure
+        // once the unmount actually fails; that path is covered where
+        // the failure message is applied.
     }
 
     #[test]
