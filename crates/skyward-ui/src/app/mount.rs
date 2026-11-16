@@ -106,10 +106,13 @@ mod tests {
             MountRow { base: "vendor".into(), point: "/vendor".into(), mounted: true, holders: Vec::new() },
         ]));
         let frame = app.frame(&f, &i);
-        assert!(matches!(frame.hits[0].action, Action::Unavailable(_)), "the programs using odm keep it");
+        // A partition in use keeps its switch: trying to unmount it is
+        // how the reason surfaces. What changes is the subtitle naming
+        // the programs that hold it.
+        assert_eq!(frame.hits[0].action, Action::MountToggle(0));
         assert_eq!(frame.hits[1].action, Action::MountToggle(1));
-        let busy = frame.hits[0].action;
-        assert!(tap(&mut app, &f, &i, busy).is_empty());
+        let held_row = app.act(Action::MountToggle(0), 0);
+        assert_eq!(held_row, vec![Effect::Unmount("odm".into())]);
         app.tick(1000);
         assert_eq!(app.deadline(1000), Some(TOAST_MS), "it says why");
     }
@@ -143,7 +146,8 @@ mod tests {
         let (f, i) = (fonts(), info());
         let mut app = App::new(Screen::Mount, W, H, PPD);
         app.set_mounts(Ok(vec![MountRow { base: "odm".into(), point: "/odm".into(), mounted: true, holders: vec!["qseecomd".into()] }]));
-        tap(&mut app, &f, &i, Action::Unavailable("无法卸载正在使用的分区"));
+        let _ = (f, i);
+        app.act(Action::Unavailable("无法卸载正在使用的分区"), 0);
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("无法卸载正在使用的分区"));
         // Once the row tapped has faded back, only the message waits.
         app.tick(1000);

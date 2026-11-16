@@ -647,7 +647,10 @@ mod tests {
         let mut app = App::new(Screen::Files, W, H, PPD);
         app.set_files("/data".into(), Err("read /data: Permission denied (os error 13)".into()), LISTED);
         let fr = app.frame(&f, &i);
-        assert!(fr.hits.is_empty() && fr.rows.is_none());
+        // An unreadable folder has no file entries; the search capsule,
+        // the OTG dock and the terminal button stay available.
+        assert!(fr.rows.is_none(), "no file entries are listed");
+        assert!(fr.hits.iter().all(|h| h.action == Action::FilesSearch), "only the search control is on the page");
     }
 
     #[test]

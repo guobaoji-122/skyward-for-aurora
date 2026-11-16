@@ -170,7 +170,7 @@ mod tests {
         tap_back(&mut app, &f, &i, 2000);
         app.tick(3000);
         tap(&mut app, &f, &i, Action::Open(Screen::Mount));
-        tap(&mut app, &f, &i, Action::Unavailable("A partition in use can't be unmounted"));
+        app.act(Action::Unavailable("A partition in use can't be unmounted"), 0);
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("A partition in use can't be unmounted"), "as do its messages");
     }
 
