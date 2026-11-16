@@ -21,3 +21,7 @@ notes/
 .cargo/
 pr-patches/
 *.log
+
+# Local build cache and forensic reference assets (never commit)
+tmp/
+build-ref/

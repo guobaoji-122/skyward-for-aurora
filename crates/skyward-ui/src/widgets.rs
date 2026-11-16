@@ -1363,13 +1363,15 @@ pub struct Row<'a> {
     /// A word in an outline after the title, such as a network's bands.
     pub tag: Option<&'a str>,
     pub sub: Option<&'a str>,
+    /// Keep the subtitle to one line, hiding the rest behind an ellipsis.
+    pub sub_short: bool,
     pub trail: Trail<'a>,
     pub tint: Option<Rgba>,
 }
 
 impl<'a> Row<'a> {
     pub fn new(title: &'a str) -> Self {
-        Row { icon: None, fan: None, title, tag: None, sub: None, trail: Trail::Arrow, tint: None }
+        Row { icon: None, fan: None, title, tag: None, sub: None, sub_short: false, trail: Trail::Arrow, tint: None }
     }
     pub fn icon(mut self, color: Rgba, icon: Icon) -> Self {
         self.icon = Some((color, icon));
@@ -1385,6 +1387,11 @@ impl<'a> Row<'a> {
     }
     pub fn subtitle(mut self, sub: &'a str) -> Self {
         self.sub = Some(sub);
+        self
+    }
+    pub fn subtitle_short(mut self, sub: &'a str) -> Self {
+        self.sub = Some(sub);
+        self.sub_short = true;
         self
     }
     pub fn trail(mut self, trail: Trail<'a>) -> Self {
@@ -1426,7 +1433,16 @@ fn layout(c: &Canvas, t: &Theme, f: &Fonts, r: &Row) -> Layout {
         Trail::Choice(s) => m.dp(UPDOWN_RIGHT + UPDOWN_W + UPDOWN_VALUE_GAP) + m.value_gap + c.text_width(&f.value, s, m.sub_px),
     };
     let text_max = card_w - text_x - trail_w;
-    let sub_lines = r.sub.map(|s| wrap(c, &f.body, s, m.sub_px, text_max)).unwrap_or_default();
+    let mut sub_lines = r.sub.map(|s| wrap(c, &f.body, s, m.sub_px, text_max)).unwrap_or_default();
+    if r.sub_short && sub_lines.len() > 1 {
+        let mut first = std::mem::take(&mut sub_lines[0]);
+        while !first.is_empty()
+            && c.text_width(&f.body, &format!("{first}…"), m.sub_px) > text_max
+        {
+            first.pop();
+        }
+        sub_lines = vec![format!("{first}…")];
+    }
     let h = if sub_lines.is_empty() {
         if r.fan.is_some() {
             m.dp(FAN_ROW_H)

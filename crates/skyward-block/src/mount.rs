@@ -291,8 +291,17 @@ mod sys {
         let all = mounts()?;
         let below = |m: &MountInfo| m.mount_point.starts_with(target) && m.mount_point != target;
         let nested: HashSet<i32> = all.iter().filter(|m| below(m)).map(|m| m.mnt_id).collect();
-        // `pid` is the parent mount's id.
-        let top: Vec<&MountInfo> = all.iter().filter(|m| below(m) && !nested.contains(&m.pid)).collect();
+        // `pid` is the parent mount's id. Only directory mount points can be
+        // moved to a park directory: a bind mount stacked on a *file* below
+        // `target` (for example a signed .ko laid over system_dlkm) cannot be
+        // `MS_MOVE`d onto a directory and makes the kernel return EINVAL. Such
+        // a file mount belongs to the tree being covered and moves with its
+        // parent, so leave it out of `top` while keeping it in `nested` to
+        // stop its parent from being chosen twice.
+        let top: Vec<&MountInfo> = all
+            .iter()
+            .filter(|m| below(m) && !nested.contains(&m.pid) && m.mount_point.is_dir())
+            .collect();
         let mut parked = Parked::default();
         if top.is_empty() {
             return Ok(parked);

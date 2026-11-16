@@ -77,7 +77,12 @@ const HARDWARE_DIRECTORY_READY: &str = "hwservicemanager.ready";
 /// the odm partition asks for that neither has. The directory for hardware
 /// services is the installed system's own program and runs on its
 /// libraries alone.
-const VENDOR_LIBRARIES: [&str; 2] = ["/system/lib64", "/vendor/lib64"];
+/// A vendor HAL keeps the libraries of its own hardware interface in the
+/// `hw` folder beside its other libraries: the secure element service, for
+/// one, needs libEseUtils.so from there. Without it the program cannot be
+/// linked at all, and the chain of the phone's keys stops before the
+/// recovery serves the OMAPI service the weaver reaches its slots through.
+const VENDOR_LIBRARIES: [&str; 3] = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"];
 const ODM_LIBRARIES: [&str; 5] = ["/system/lib64", "/vendor/lib64", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"];
 const SYSTEM_LIBRARIES: [&str; 3] = ["/mnt/system/system/lib64/bootstrap", "/mnt/system/system/lib64", "/mnt/system_ext/lib64"];
 
@@ -276,7 +281,16 @@ fn element(phone: &Phone, name: &str) -> Result<Started> {
         }
     };
     let registers = besides(phone, program, &own, |_| false);
-    Ok(started(phone, program, Ready::Service(own), registers))
+    let mut begun = started(phone, program, Ready::Service(own), registers);
+    // A recovery holds no secure element of the phone's own: the service
+    // may link and still find no hardware, as it says with "Unknown eSE HW".
+    // It must not hold up the steps after it -- the recovery serves the
+    // OMAPI service next, and the weaver reaches its slots through that.
+    // Waiting the full timeout here used to end the whole chain, so the
+    // weaver was left with the OMAPI service unregistered and could not
+    // read the slots a screen lock's secret is kept in.
+    begun.service.optional = true;
+    Ok(begun)
 }
 
 /// The description of the service `name` of `kind`, where the phone

@@ -304,13 +304,14 @@ impl App {
                 self.refresh();
             }
             Action::ExportLogs => {
-                let ([recovery, kernel], storage) = (self.state.logs, self.state.logs_to == 1);
-                if !recovery && !kernel {
+                let [recovery, kernel, browser, full] = self.state.logs;
+                let storage = self.state.logs_to == 1;
+                if !recovery && !kernel && !browser && !full {
                     self.say(l.pick(["请选择要导出的日志", "請選擇要匯出的記錄", "Choose the logs to export"]), now);
                 } else if storage && !self.state.data.storage_open() {
                     self.say(l.pick(DECRYPT_FIRST), now);
                 } else {
-                    return vec![Effect::ExportLogs { recovery, kernel, storage }];
+                    return vec![Effect::ExportLogs { recovery, kernel, browser, full, storage }];
                 }
             }
             Action::PickSlot(slot) => {
@@ -348,6 +349,9 @@ impl App {
                 self.refresh();
             }
             Action::OpenEntry(i) => {
+                if self.screen() == Screen::FilesSearch {
+                    self.back(now);
+                }
                 let entry = self.state.files.entry(i).clone();
                 match entry.kind {
                     FileKind::Folder { .. } | FileKind::Link { folder: true, .. } => {
@@ -580,6 +584,409 @@ impl App {
                 }
             }
             Action::Unavailable(text) => self.say(text, now),
+
+            Action::BrowserAddress => {
+                if self.screen() == Screen::BrowserAddress {
+                    return Vec::new();
+                }
+                let b = &mut self.state.browser;
+                if !b.url.is_empty() {
+                    b.address = b.url.clone();
+                }
+                self.state.layer = Layer::Letters;
+                self.open(Screen::BrowserAddress);
+            }
+
+            Action::BrowserBack => {
+                let at = self.state.browser.at;
+                if at > 0 {
+                    return self.browser_step(at - 1, now);
+                }
+                self.say(l.pick(["已到最早的一页", "已到最早的一頁", "This is the first page"]), now);
+            }
+
+            Action::BrowserBasic => {
+                self.state.browser.full_active = false;
+                self.state.browser.full_text = false;
+                let url = self.state.browser.url.clone();
+                if !url.is_empty() {
+                    return self.browser_read(url);
+                }
+                self.state.browser.view = BrowserView::Home;
+                self.refresh();
+            }
+
+            Action::BrowserClearAddress => {
+                self.state.browser.address.clear();
+                self.refresh();
+            }
+
+            Action::BrowserCloseTab(i) => {
+                self.state.browser.close_tab(i);
+                self.refresh();
+            }
+
+            Action::BrowserDownloads => self.open(Screen::BrowserDownloads),
+
+            Action::BrowserFormField(form, field) => {
+                let b = &mut self.state.browser;
+                if b.form.len() <= form {
+                    b.form.resize(form + 1, Vec::new());
+                }
+                if b.form[form].len() <= field {
+                    b.form[form].resize(field + 1, String::new());
+                }
+                b.field = Some((form, field));
+                self.state.layer = Layer::Letters;
+                self.open(Screen::BrowserForm);
+            }
+
+            Action::BrowserFormSubmit(form) => return self.browser_submit(form, now),
+
+            Action::BrowserForward => {
+                let (at, len) = (self.state.browser.at, self.state.browser.history.len());
+                if at + 1 < len {
+                    return self.browser_step(at + 1, now);
+                }
+                self.say(l.pick(["已到最新的一页", "已到最新的一頁", "This is the last page"]), now);
+            }
+
+            Action::BrowserFull => {
+                self.browser_check_full();
+                self.open(Screen::BrowserFull);
+            }
+
+            Action::BrowserFullLoad => {
+                let url = if self.state.browser.url.is_empty() { "https://www.bing.com/".to_string() } else { self.state.browser.url.clone() };
+                if matches!(self.state.browser.full, BrowserFull::Ready(_) | BrowserFull::Running(_)) {
+                    return self.browser_plugin_start_at(url, now);
+                }
+                self.open(Screen::BrowserFull);
+            }
+
+            Action::BrowserGo => {
+                let input = self.state.browser.address.clone();
+                if self.screen() == Screen::BrowserAddress {
+                    self.back(now);
+                }
+                return self.browser_go(&input, now);
+            }
+
+            Action::BrowserHistory(at) => return self.browser_step(at, now),
+
+            Action::BrowserHome => {
+                self.state.browser.full_active = false;
+                self.state.browser.view = BrowserView::Home;
+                self.state.browser.address.clear();
+                self.refresh();
+            }
+
+            Action::BrowserKeyboard => {
+                if self.state.browser.full_active {
+                    self.state.browser.full_text = true;
+                    self.state.browser.address.clear();
+                    self.state.layer = Layer::Letters;
+                    self.open(Screen::BrowserAddress);
+                }
+            }
+
+            Action::BrowserLink(i) => {
+                let block = self.state.browser.page().and_then(|p| p.blocks.get(i)).cloned();
+                if let Some(skyward_net::web::Block::Link { url, download, .. }) = block {
+                    if download {
+                        return self.browser_download(url.clone(), skyward_net::web::file_name(&url), now);
+                    }
+                    if self.screen() == Screen::BrowserAddress {
+                        self.back(now);
+                    }
+                    return self.browser_go(&url, now);
+                }
+            }
+
+            Action::BrowserNewTab => {
+                self.state.browser.new_tab();
+                self.open(Screen::Browser);
+            }
+
+            Action::BrowserOpenDownload(i) => return self.browser_open_download(i, now),
+
+            Action::BrowserPickTab(i) => {
+                self.state.browser.switch_tab(i);
+                self.open(Screen::Browser);
+            }
+
+            Action::BrowserPluginInstall => return self.browser_plugin_install(now),
+
+            Action::BrowserPluginRemove => return self.browser_plugin_remove(now),
+
+            Action::BrowserPluginStart => return self.browser_plugin_start(now),
+
+            Action::BrowserPluginStop => return self.browser_plugin_stop(),
+
+            Action::BrowserPluginTap(x, y) => return self.browser_plugin_tap(x, y, now),
+
+            Action::BrowserQuick => self.open(Screen::BrowserQuick),
+
+            Action::BrowserQuickAdd => {
+                let url = self.state.browser.url.clone();
+                if !url.is_empty() && self.state.browser.quick.iter().all(|q| q.url != url) {
+                    let title = skyward_net::web::host_of(&url);
+                    self.state.browser.quick.push(QuickLink {
+                        title,
+                        url,
+                        color: Rgba::rgb(0x34, 0x82, 0xff),
+                        icon: Icon::Globe,
+                    });
+                    self.refresh();
+                }
+            }
+
+            Action::BrowserQuickOpen(i) => {
+                if let Some(q) = self.state.browser.quick.get(i).cloned() {
+                    if self.screen() == Screen::BrowserAddress {
+                        self.back(now);
+                    }
+                    return self.browser_go(&q.url, now);
+                }
+            }
+
+            Action::BrowserQuickRemove(i) => {
+                if i < self.state.browser.quick.len() {
+                    self.state.browser.quick.remove(i);
+                    self.refresh();
+                }
+            }
+
+            Action::BrowserQuickReset => {
+                self.state.browser.quick = default_quick();
+                self.refresh();
+            }
+
+            Action::BrowserReload => {
+                if matches!(self.state.browser.view, BrowserView::Home) {
+                    self.refresh();
+                    return Vec::new();
+                }
+                if self.state.browser.full_active {
+                    self.state.browser.full_progress = Some(0.2);
+                    self.refresh();
+                    return vec![Effect::BrowserPluginReload];
+                }
+                let url = self.state.browser.url.clone();
+                if url.is_empty() {
+                    self.open(Screen::BrowserAddress);
+                } else if !self.state.online() {
+                    self.say(l.pick(["需先连接 WLAN", "需先連接 Wi-Fi", "Connect to Wi-Fi first"]), now);
+                    self.open(Screen::Wlan);
+                    return self.arrive_at(Screen::Wlan);
+                } else {
+                    return self.browser_read(url);
+                }
+            }
+
+            Action::BrowserSaveFile => {
+                if let BrowserView::File(file) = self.state.browser.view.clone() {
+                    return self.browser_download(file.url.clone(), file.name.clone(), now);
+                }
+            }
+
+            Action::BrowserStopDownload => {
+                if self.state.browser.downloading() {
+                    return vec![Effect::StopBrowser];
+                }
+            }
+
+            Action::BrowserTabs => self.open(Screen::BrowserTabs),
+
+            Action::BrowserTo(url) => {
+                if self.screen() == Screen::BrowserAddress {
+                    self.back(now);
+                }
+                if self.screen() == Screen::Magisk {
+                    self.open(Screen::Browser);
+                }
+                return self.browser_go(url, now);
+            }
+
+            Action::BrowserZoomIn | Action::BrowserZoomOut => {
+                if self.state.browser.full_active {
+                    let up = matches!(action, Action::BrowserZoomIn);
+                    let zoom = (self.state.browser.full_zoom * if up { 1.25 } else { 0.8 }).clamp(0.5, 3.0);
+                    self.state.browser.full_zoom = zoom;
+                    self.state.browser.full_progress = Some(0.2);
+                    self.refresh();
+                    return vec![Effect::BrowserPluginPinch { scale: if up { 1.25 } else { 0.8 } }];
+                }
+            }
+
+            Action::BrowserScrollUp | Action::BrowserScrollDown => {
+                if self.state.browser.full_active {
+                    let dy = if matches!(action, Action::BrowserScrollDown) { 620 } else { -620 };
+                    self.state.browser.full_progress = Some(0.2);
+                    self.refresh();
+                    return vec![Effect::BrowserPluginScroll { dy }];
+                }
+            }
+
+            Action::BrowserMenu => self.open(Screen::BrowserMenu),
+            Action::BrowserHistoryList => self.open(Screen::BrowserHistory),
+            Action::BrowserBookmarksList => self.open(Screen::BrowserBookmarks),
+            Action::BrowserBookmark => {
+                let page = self.state.browser.page().map(|p| BrowserMark { title: p.title.clone(), url: p.url.clone() });
+                if let Some(mark) = page {
+                    if let Some(at) = self.state.browser.bookmarks.iter().position(|b| b.url == mark.url) {
+                        self.state.browser.bookmarks.remove(at);
+                        self.say(l.pick(["已取消书签", "已取消書籤", "Bookmark removed"]), now);
+                    } else {
+                        self.state.browser.bookmarks.push(mark);
+                        self.say(l.pick(["已加入书签", "已加入書籤", "Bookmarked"]), now);
+                    }
+                    self.refresh();
+                }
+            }
+            Action::BrowserMarkOpen(i) => {
+                let mark = match self.screen() {
+                    Screen::BrowserHistory => self.state.browser.recent.get(i).cloned(),
+                    Screen::BrowserBookmarks => self.state.browser.bookmarks.get(i).cloned(),
+                    _ => None,
+                };
+                if let Some(mark) = mark {
+                    if self.screen() != Screen::Browser {
+                        self.open(Screen::Browser);
+                    }
+                    return self.browser_go(&mark.url, now);
+                }
+            }
+            Action::BrowserMarkRemove(i) => {
+                match self.screen() {
+                    Screen::BrowserHistory => {
+                        if i < self.state.browser.recent.len() {
+                            self.state.browser.recent.remove(i);
+                        }
+                    }
+                    Screen::BrowserBookmarks => {
+                        if i < self.state.browser.bookmarks.len() {
+                            self.state.browser.bookmarks.remove(i);
+                        }
+                    }
+                    _ => {}
+                }
+                self.refresh();
+            }
+            Action::BrowserFormClose => {
+                self.state.browser.field = None;
+                self.refresh();
+            }
+            Action::BrowserPluginDownload => {
+                if !self.state.data.storage_open() {
+                    self.say(l.pick(["请先解密 data 分区", "請先解密 data 分割區", "Decrypt the data partition first"]), now);
+                } else if self.state.browser.plugin_download.as_ref().is_some_and(|d| d.error.is_none() && d.total.map_or(true, |t| d.done < t)) {
+                    self.say(l.pick(["插件正在下载", "外掛正在下載", "The plugin is downloading"]), now);
+                } else {
+                    self.state.browser.plugin_download = Some(PluginDownload { done: 0, total: None, speed: 0, error: None });
+                    return vec![Effect::BrowserPluginDownload {
+                        url: "https://github.com/Jamvii/skyward-for-aurora/releases/latest/download/chromium.zip".into(),
+                        path: "/sdcard/Download/Skyward/chromium.zip".into(),
+                    }];
+                }
+            }
+            Action::BrowserStop => {
+                let url = self.state.browser.url.clone();
+                if !url.is_empty() {
+                    self.state.browser.view = BrowserView::Failed { url, why: l.pick(["已停止", "已停止", "Stopped"]).into() };
+                }
+                self.refresh();
+                return vec![Effect::StopBrowser];
+            }
+
+            Action::CheckMagiskUpdate => {
+                if matches!(self.state.magisk.root, MagiskRoot::Present(ref name) if name == "Magisk") {
+                    return vec![Effect::CheckMagiskUpdate];
+                }
+            }
+
+            Action::ClearFilesSearch => {
+                self.state.files_search.clear();
+                self.refresh();
+            }
+
+            Action::FilesSearch => {
+                self.state.files_search.clear();
+                self.state.layer = Layer::Letters;
+                self.open(Screen::FilesSearch);
+            }
+
+            Action::InstallMagiskModule => {
+                if !self.state.data.storage_open() {
+                    self.say(l.pick(["请先解密 data 分区", "請先解密 data 分割區", "Decrypt the data partition first"]), now);
+                } else {
+                    return vec![Effect::InstallMagiskModule("/sdcard/Download/Skyward/module.zip".into())];
+                }
+            }
+
+            Action::MagiskDownload => {
+                if self.state.magisk.latest.is_some() {
+                    return vec![Effect::DownloadMagisk];
+                }
+            }
+
+            Action::MagiskPickZip => {
+                if !self.state.data.storage_open() {
+                    self.say(l.pick(["请先解密 data 分区", "請先解密 data 分割區", "Decrypt the data partition first"]), now);
+                } else {
+                    self.state.magisk_pick = true;
+                    self.open(Screen::Choose(Place::Storage));
+                    return vec![Effect::ReadPlace(Place::Storage, "/sdcard".into())];
+                }
+            }
+
+            Action::MagiskRepo => {
+                if self.screen() == Screen::Magisk {
+                    self.open(Screen::Browser);
+                    return self.browser_go("https://github.com/topics/magisk-module", now);
+                }
+            }
+
+            Action::OpenMagisk => {
+                self.open(Screen::Magisk);
+                return vec![Effect::ReadMagisk];
+            }
+
+            Action::OpenOtg => {
+                let l = self.state.lang;
+                match self.state.usb_drive.clone() {
+                    Some(UsbDrive::Shown) => {
+                        self.state.files = Folder::new(USB_DRIVE);
+                        self.open(Screen::Files);
+                        return vec![Effect::ReadUsbDir(USB_DRIVE.into())];
+                    }
+                    Some(UsbDrive::Unreadable(why)) => self.say(&why, now),
+                    None => self.say(l.pick(USB_DRIVE_WANTED), now),
+                }
+            }
+
+            Action::ReadMagisk => return vec![Effect::ReadMagisk],
+
+            Action::RemoveMagiskModule(i) => {
+                if let Some(Ok(modules)) = self.state.magisk.modules.as_ref() {
+                    if let Some(module) = modules.get(i) {
+                        return vec![Effect::RemoveMagisk { id: module.id.clone(), path: module.path.clone() }];
+                    }
+                }
+            }
+
+            Action::ToggleMagiskModule(i) => {
+                if let Some(Ok(modules)) = self.state.magisk.modules.as_ref() {
+                    if let Some(module) = modules.get(i) {
+                        return vec![Effect::ToggleMagisk {
+                            id: module.id.clone(),
+                            path: module.path.clone(),
+                            enabled: !module.enabled,
+                        }];
+                    }
+                }
+            }
+
         }
         Vec::new()
     }
@@ -588,6 +995,7 @@ impl App {
     fn typing(&mut self) -> &mut String {
         match self.screen() {
             Screen::Search => &mut self.state.search,
+            Screen::FilesSearch => &mut self.state.files_search,
             Screen::Decrypt => &mut self.state.code,
             Screen::Rename => &mut self.state.new_name,
             Screen::WlanPassword => &mut self.state.password,
@@ -597,6 +1005,15 @@ impl App {
                     Field::Name => &mut a.name,
                     Field::Password => &mut self.state.password,
                 }
+            }
+            Screen::BrowserAddress => &mut self.state.browser.address,
+            Screen::BrowserForm => {
+                let (form, field) = self.state.browser.field.expect("the form page has a field");
+                &mut self.state.browser.form[form][field]
+            }
+            Screen::Browser if self.state.browser.field.is_some() => {
+                let (form, field) = self.state.browser.field.expect("the form field is chosen");
+                &mut self.state.browser.form[form][field]
             }
             s => panic!("{s:?} has no text field"),
         }
@@ -667,6 +1084,24 @@ impl App {
                             return fx;
                         }
                     }
+                }
+                Screen::BrowserAddress => {
+                    let input = std::mem::take(&mut self.state.browser.address);
+                    if input.trim().is_empty() {
+                        self.say(l.pick(["请输入网址或搜索词", "請輸入網址或搜尋詞", "Enter an address or search for something"]), now);
+                    } else {
+                        self.back(now);
+                        return self.browser_go(&input, now);
+                    }
+                }
+                Screen::BrowserForm => {
+                    let (form, _) = self.state.browser.field.expect("the form page has a field");
+                    self.back(now);
+                    return self.browser_submit(form, now);
+                }
+                Screen::Browser if self.state.browser.field.is_some() => {
+                    let (form, _) = self.state.browser.field.expect("the field is chosen");
+                    return self.browser_submit(form, now);
                 }
                 // So is a name no network can have; the keyboard then types
                 // into the field turned down.

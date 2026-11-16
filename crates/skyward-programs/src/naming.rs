@@ -158,6 +158,7 @@ mod tests {
             user: user.map(str::to_string),
             groups: words(groups),
             capabilities: Vec::new(),
+            ..Service::default()
         })))
     }
 

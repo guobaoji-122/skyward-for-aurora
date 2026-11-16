@@ -4,6 +4,7 @@
 
 use crate::canvas::{Canvas, Run};
 use crate::charge;
+use crate::doubletap::DoubleTap;
 use crate::color::Rgba;
 use crate::editor::{self, Editor};
 use crate::files::{self, FileType};
@@ -33,8 +34,12 @@ use skyward_net::wlan::{Joined, Network, Power, Stage as Joining, Traffic, Wlan}
 use skyward_systems::{Overview, Who};
 use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
 
+use crate::icons::Icon;
+use skyward_net::web::{FileOffer, Page as WebPage};
+
 mod act;
 mod aurora;
+mod browserpage;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Asking {
@@ -68,6 +73,149 @@ pub enum Asking {
 
 pub use backup::{BACKUP_PARTS, BACKUP_RESTORABLE};
 pub use aurora::{AodStyle, Queued, Starter};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Screen {
+    Decrypt,
+    Home,
+    Settings,
+    Reboot,
+    Wipe,
+    /// Mounting and unmounting the slot's partitions.
+    Mount,
+    Install,
+    /// A place's folders and the files in them that can be installed, to
+    /// choose one.
+    Choose(Place),
+    /// Installing a package, which the computer sends with `adb sideload`
+    /// or which is a file chosen in a place, and how it went.
+    Installing,
+    About,
+    Specs,
+    /// How long the screen stays on with nothing touched.
+    ScreenOff,
+    /// Finding a feature or partition by name, typed on the screen's own
+    /// keyboard.
+    Search,
+    Backup,
+    /// The backups found, to restore one.
+    Restore,
+    /// One backup, and what to restore from it.
+    RestoreBackup,
+    /// Backing up or restoring under way, and how it ended.
+    BackupJob,
+    /// Tools for the experienced: files, a terminal, the logs.
+    Advanced,
+    Files,
+    /// The file manager's search, over the folder it shows.
+    FilesSearch,
+    /// One file, and what can be done with it.
+    FileInfo,
+    /// The permission bits of the entry the file page shows, a switch each.
+    Permissions,
+    /// A text file, changed on the screen's keyboard and then saved.
+    Editor,
+    Terminal,
+    /// Giving the data partition's files the SELinux labels the installed
+    /// system's rules give them: what it does and a swipe to start, then
+    /// how far it has come and how it ended.
+    Relabel,
+    /// What the blocks that say whether the bootloader and the kernel check
+    /// what they start say now, and a way to turn both checks off or back
+    /// on.
+    Avb,
+    /// What the bootloader was told to start next: the message it left in
+    /// misc, what recovery makes of it, and a way to take it away.
+    Bcb,
+    /// The partitions whose filesystems can be repaired or made afresh as
+    /// another.
+    Filesystems,
+    /// One of them: what it holds, and what to do to it, with a swipe to
+    /// do it.
+    Filesystem,
+    /// Work on whole partitions under way, and how it ended: the
+    /// filesystem page's, or what the system asked for before the recovery
+    /// started.
+    PartWork,
+    Language,
+    TimeZone,
+    /// Saving the logs, as a bug report asks for them.
+    Logs,
+    /// Where an update the system installed stands, and merging it into
+    /// the slot it went to.
+    Update,
+    /// Skyward's newest release, and updating to it: its build for the
+    /// phone downloaded and written into the recovery partitions.
+    SkywardUpdate,
+    /// Skyward's own licence.
+    License,
+    /// The interface typeface and the terms it is used under.
+    FontLicense,
+    /// Which slot the phone starts from next.
+    Slot,
+    /// The installed system and the one Skyward installed beside it: which
+    /// of them starts, switching between them, and taking the other away.
+    Systems,
+    /// The phone's own fastbootd serving the computer's fastboot, and where
+    /// to go from it. Its only page, worked with the keys: the partitions
+    /// the touchscreen runs from are left out while fastbootd rewrites
+    /// super.
+    Fastboot,
+    /// Erasing what the system asked to erase before the recovery started,
+    /// all user data or the cache alone: how far it has come, and where to
+    /// go if it stops.
+    Erase,
+    /// The system could not start Android and asks whether to erase all
+    /// user data, which may be what keeps it from starting.
+    CantStart,
+    /// Something the system asked of the recovery that it does not do.
+    Unhandled,
+    /// A new name for the entry the file page shows, typed on the screen's
+    /// keyboard.
+    Rename,
+    /// The folder an entry is copied or moved to already holds that name;
+    /// what to do is the user's to choose.
+    Clash,
+    /// Copying, moving or deleting under way, and how it ended.
+    FileJob,
+    /// The WLAN switch, the network chosen and how joining it goes, and
+    /// the networks in range.
+    Wlan,
+    /// Sending and receiving files with LocalSend over the WLAN.
+    LocalSend,
+    /// The password of the network chosen, typed on the screen's keyboard.
+    WlanPassword,
+    /// The network joined, and the address and the rest it gave.
+    WlanNetwork,
+    /// A network added by hand: its name, how it is protected and its
+    /// password, typed on the screen's keyboard.
+    WlanAdd,
+    /// The web, read as text, pictures and links: the address bar, the
+    /// page, the forms it carries, and the files it offers to save.
+    Browser,
+    /// The address typed on the screen's keyboard, a search where it names
+    /// no site.
+    BrowserAddress,
+    /// The files the browser has saved or is saving.
+    BrowserDownloads,
+    /// One field of a page's form, typed on the screen's keyboard.
+    BrowserForm,
+    /// The optional Linux Chromium plugin, which gives pages their scripts
+    /// and pictures back: where it stands, and how to get it.
+    BrowserFull,
+    /// The open pages, to choose among, close, or add one.
+    BrowserTabs,
+    /// The start page's shortcuts, to add or remove.
+    BrowserQuick,
+    /// The browser's own menu: history, bookmarks, and what else it offers.
+    BrowserMenu,
+    /// The pages the browser has read, to open one again.
+    BrowserHistory,
+    /// The pages the user has kept, to open one again.
+    BrowserBookmarks,
+    /// Magisk, KernelSU or APatch and the modules they run.
+    Magisk,
+}
 mod backup;
 mod decrypt;
 mod draw;
@@ -114,129 +262,6 @@ pub use update::*;
 pub use wipe::*;
 pub use wlan::*;
 
-/// The pages of the recovery.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-
-    Decrypt,
-    Home,
-    Settings,
-    Reboot,
-    Wipe,
-    /// Mounting and unmounting the slot's partitions.
-    Mount,
-    Install,
-    /// A place's folders and the files in them that can be installed, to
-    /// choose one.
-    Choose(Place),
-    /// Installing a package, which the computer sends with `adb sideload`
-    /// or which is a file chosen in a place, and how it went.
-    Installing,
-    About,
-    Specs,
-    /// How long the screen stays on with nothing touched.
-    ScreenOff,
-    /// Finding a feature or partition by name, typed on the screen's own
-    /// keyboard.
-    Search,
-    Backup,
-    /// The backups found, to restore one.
-    Restore,
-    /// One backup, and what to restore from it.
-    RestoreBackup,
-    /// Backing up or restoring under way, and how it ended.
-    BackupJob,
-    /// Tools for the experienced: files, a terminal, the logs.
-    Advanced,
-    Files,
-    /// One file, and what can be done with it.
-    FileInfo,
-    /// The permission bits of the entry the file page shows, a switch each.
-    Permissions,
-    /// A text file, changed on the screen's keyboard and then saved.
-    Editor,
-    Terminal,
-    /// Giving the data partition's files the SELinux labels the installed
-    /// system's rules give them: what it does and a swipe to start, then
-    /// how far it has come and how it ended.
-    Relabel,
-    /// The partitions whose filesystems can be repaired or made afresh as
-    /// another.
-    Filesystems,
-    /// One of them: what it holds, and what to do to it, with a swipe to
-    /// do it.
-    Filesystem,
-    /// Work on whole partitions under way, and how it ended: the
-    /// filesystem page's, or what the system asked for before the recovery
-    /// started.
-    PartWork,
-    Language,
-    TimeZone,
-    /// Saving the logs, as a bug report asks for them.
-    Logs,
-    /// Where an update the system installed stands, and merging it into
-    /// the slot it went to.
-    Update,
-    /// Skyward's newest release, and updating to it: its build for the
-    /// phone downloaded and written into the recovery partitions.
-    SkywardUpdate,
-    /// Skyward's own licence.
-    License,
-    /// The interface typeface and the terms it is used under.
-    FontLicense,
-    /// Which slot the phone starts from next.
-    Slot,
-    /// The installed system and the one Skyward installed beside it: which
-    /// of them starts, switching between them, and taking the other away.
-    Systems,
-    /// What the phone's vbmeta blocks say, and turning the two checks off
-    /// or back on.
-    Avb,
-    /// The bootloader message in misc, as the phone last left it.
-    Bcb,
-    /// The LocalSend file transfer, sending files to the computer.
-    LocalSend,
-    /// The phone's own fastbootd serving the computer's fastboot, and where
-    /// to go from it. Its only page, worked with the keys: the partitions
-    /// the touchscreen runs from are left out while fastbootd rewrites
-    /// super.
-    Fastboot,
-    /// Erasing what the system asked to erase before the recovery started,
-    /// all user data or the cache alone: how far it has come, and where to
-    /// go if it stops.
-    Erase,
-    /// The system could not start Android and asks whether to erase all
-    /// user data, which may be what keeps it from starting.
-    CantStart,
-    /// Something the system asked of the recovery that it does not do.
-    Unhandled,
-    /// A new name for the entry the file page shows, typed on the screen's
-    /// keyboard.
-    Rename,
-    /// The folder an entry is copied or moved to already holds that name;
-    /// what to do is the user's to choose.
-    Clash,
-    /// Copying, moving or deleting under way, and how it ended.
-    FileJob,
-    /// The WLAN switch, the network chosen and how joining it goes, and
-    /// the networks in range.
-    Wlan,
-    /// The password of the network chosen, typed on the screen's keyboard.
-    WlanPassword,
-    /// The network joined, and the address and the rest it gave.
-    WlanNetwork,
-    /// A network added by hand: its name, how it is protected and its
-    /// password, typed on the screen's keyboard.
-    WlanAdd,
-    FilesSearch,
-    Browser,
-    BrowserAddress,
-    BrowserDownloads,
-    BrowserForm,
-    BrowserFull,
-    BrowserTabs,
-    BrowserQuick,
-    Magisk,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Confirm {
@@ -272,7 +297,7 @@ pub enum Confirm {
     /// Take the other system away.
     RemoveSystem,
     /// Install the system the installer holds with the room chosen.
-    InstallSystem,    Avb(bool),
+    InstallSystem,
     ClearStarter,
     InstallQueue,
 
@@ -281,7 +306,7 @@ pub enum Confirm {
 
 /// What a control does when touched.
 #[derive(Clone, Copy, Debug, PartialEq)]
-
+pub enum Action {
     Open(Screen),
     /// Leave the decrypt page for the page it was opened from; the page
     /// the recovery started on, for the home page without keeping it
@@ -437,7 +462,7 @@ pub enum Confirm {
     /// Stop downloading the build.
     StopSkywardUpdate,
     /// A control whose work is not wired up yet; touching it says so.
-    Unavailable(&'static str),    QueuePick(Place),
+    Unavailable(&'static str),
     QueueDrop(usize),
     AodStyle,
 
@@ -490,6 +515,27 @@ pub enum Confirm {
     BrowserPluginTap(u16, u16),
     BrowserPluginStop,
     BrowserPluginRemove,
+    /// The browser's menu, with the pages it has read and the ones kept.
+    BrowserMenu,
+    /// The pages the browser has read.
+    BrowserHistoryList,
+    /// The pages the user has kept.
+    BrowserBookmarksList,
+    /// Keep the page shown, or let it go.
+    BrowserBookmark,
+    /// Open a page from the history or the bookmarks.
+    BrowserMarkOpen(usize),
+    /// Forget a page from the history or the bookmarks.
+    BrowserMarkRemove(usize),
+    /// Stop the page that is loading.
+    BrowserStop,
+    /// Leave the form's field, keeping what was typed.
+    BrowserFormClose,
+    /// Scroll the page of the full browser.
+    BrowserScrollUp,
+    BrowserScrollDown,
+    /// Fetch the plugin that gives pages their scripts.
+    BrowserPluginDownload,
 }
 
 /// One finger, in screen pixels.
@@ -520,7 +566,7 @@ pub enum Shot {
 
 /// Work the runtime carries out on the UI's behalf.
 #[derive(Clone, Debug, PartialEq)]
-
+pub enum Effect {
     Reboot(Target),
     /// A short tap of the vibration motor.
     Haptic,
@@ -652,7 +698,7 @@ pub enum Shot {
     /// Save the logs chosen, the recovery's own and the kernel's, into a
     /// folder of their own in internal storage or the temporary folder,
     /// saying where with [`App::report`].
-    ExportLogs { recovery: bool, kernel: bool, storage: bool },
+    ExportLogs { recovery: bool, kernel: bool, browser: bool, full: bool, storage: bool },
     /// Back up the parts ticked, by their place in [`BACKUP_PARTS`], into
     /// a folder of their own in `place`, telling how it goes with
     /// [`App::backup_started`], [`App::backup_plan`], [`App::backup_at`]
@@ -720,6 +766,10 @@ pub enum Shot {
     BrowserPluginReload,
     BrowserPluginStop,
     BrowserPluginRemove { dir: String },
+    /// Scroll the plugin's page by `dy` pixels.
+    BrowserPluginScroll { dy: i64 },
+    /// Download the plugin package from `url` into `path`.
+    BrowserPluginDownload { url: String, path: String },
 }
 
 enum Drag {
@@ -930,7 +980,7 @@ enum Ease {
 }
 
 impl Ease {
-    fn progress(self, ms: u64) -> f32 {
+    pub fn progress(self, ms: u64) -> f32 {
         match self {
             Ease::Spring(period) => motion::settle(ms, period),
             Ease::Linear(span) => (ms as f32 / span as f32).min(1.0),
@@ -959,21 +1009,21 @@ struct Fade {
 }
 
 impl Fade {
-    fn hidden(show: Ease, hide: Ease) -> Fade {
+    pub fn hidden(show: Ease, hide: Ease) -> Fade {
         Fade { on: false, since: 0, from: 0.0, show, hide }
     }
 
-    fn shown(show: Ease, hide: Ease) -> Fade {
+    pub fn shown(show: Ease, hide: Ease) -> Fade {
         Fade { on: true, since: 0, from: 1.0, show, hide }
     }
 
     /// How far in, 0 to 1, at `now`.
-    fn level(&self, now: u64) -> f32 {
+    pub fn level(&self, now: u64) -> f32 {
         let (target, ease) = if self.on { (1.0, self.show) } else { (0.0, self.hide) };
         self.from + (target - self.from) * ease.progress(now.saturating_sub(self.since))
     }
 
-    fn set(&mut self, on: bool, now: u64) {
+    pub fn set(&mut self, on: bool, now: u64) {
         if on != self.on {
             self.from = self.level(now);
             self.since = now;
@@ -982,12 +1032,12 @@ impl Fade {
     }
 
     /// Stand fully in or out at once.
-    fn jump(&mut self, on: bool) {
+    pub fn jump(&mut self, on: bool) {
         self.on = on;
         self.from = if on { 1.0 } else { 0.0 };
     }
 
-    fn moving(&self, now: u64) -> bool {
+    pub fn moving(&self, now: u64) -> bool {
         self.level(now) != if self.on { 1.0 } else { 0.0 }
     }
 }
@@ -1075,7 +1125,7 @@ struct Morph {
 
 impl Morph {
     /// How far along it is at `now`, and whether it has settled.
-    fn at(&self, now: u64) -> (f32, bool) {
+    pub fn at(&self, now: u64) -> (f32, bool) {
         let (x, done) = self.spring.at(now);
         (if self.into { 1.0 } else { 0.0 } + x / 1000.0, done)
     }
@@ -1093,7 +1143,7 @@ struct RowPress {
 
 impl RowPress {
     /// How dark the row is at `now`, from 0 to 1.
-    fn level(&self, now: u64) -> f32 {
+    pub fn level(&self, now: u64) -> f32 {
         if now < self.rise {
             return 0.0;
         }
@@ -1105,19 +1155,19 @@ impl RowPress {
     }
 
     /// Whether it has faded back after being let go.
-    fn gone(&self, now: u64) -> bool {
+    pub fn gone(&self, now: u64) -> bool {
         self.fall.is_some_and(|fall| now >= fall && motion::settle(now - fall, ROW_PRESS_PERIOD) == 1.0)
     }
 
     /// Whether it is darkening or fading back at `now`.
-    fn changing(&self, now: u64) -> bool {
+    pub fn changing(&self, now: u64) -> bool {
         let dark = self.fall.is_none() && now >= self.rise && motion::settle(now - self.rise, ROW_PRESS_PERIOD) == 1.0;
         now >= self.rise && !dark && !self.gone(now)
     }
 
     /// The finger lifted at `now`: a row that had not shown pressed yet
     /// shows it a moment.
-    fn lift(&mut self, now: u64) {
+    pub fn lift(&mut self, now: u64) {
         if now < self.rise {
             self.rise = now;
             self.fall = Some(now + QUICK_TAP_MS);
@@ -1187,6 +1237,12 @@ pub struct App {
     /// The settings changed at the pages wait to be written.
     settings_dirty: bool,
     pub state: State,
+    /// How far a finger on a dark panel has taken the clock face with it,
+    /// while the panel is in its own doze.
+    aod_drag: Option<f32>,
+    /// The two taps that light a dark panel, and where the finger began on it.
+    double_tap: DoubleTap,
+    aod_start: Option<f32>,
     /// The pages open, the one shown last: each with how far it is
     /// scrolled and where the keys are on it.
     stack: Vec<(Screen, f32, Focus)>,
@@ -1332,6 +1388,9 @@ impl App {
     pub fn new(start: Screen, w: u32, h: u32, px_per_dp: f32) -> Self {
         App {
             state: State::default(),
+            aod_drag: None,
+            double_tap: DoubleTap::new(),
+            aod_start: None,
             settings_dirty: false,
             stack: vec![(start, 0.0, Focus::Unset)],
             frame: None,
@@ -1414,11 +1473,11 @@ impl App {
         self.top().0
     }
 
-    fn top(&self) -> &(Screen, f32, Focus) {
+    pub fn top(&self) -> &(Screen, f32, Focus) {
         self.stack.last().expect("the page stack always holds a page")
     }
 
-    fn top_mut(&mut self) -> &mut (Screen, f32, Focus) {
+    pub fn top_mut(&mut self) -> &mut (Screen, f32, Focus) {
         self.stack.last_mut().expect("the page stack always holds a page")
     }
 
@@ -1470,7 +1529,7 @@ impl App {
 
     /// Whether a text field's cursor shows at `now`, and when it next turns;
     /// `None` while no cursor is up.
-    fn blink_at(&self, now: u64) -> Option<(bool, u64)> {
+    pub fn blink_at(&self, now: u64) -> Option<(bool, u64)> {
         let (_, _, since) = self.blink?;
         let n = now.saturating_sub(since) / BLINK_MS;
         Some((n.is_multiple_of(2), since + (n + 1) * BLINK_MS))
@@ -1478,7 +1537,7 @@ impl App {
 
     /// When sitting idle next changes the lit panel: when it dims, or once
     /// it is dimming, when it goes off.
-    fn idle_due(&self) -> Option<u64> {
+    pub fn idle_due(&self) -> Option<u64> {
         let (active, after) = (self.active?, SCREEN_OFF[self.state.screen_off]?);
         if !self.display_on {
             return None;
@@ -1644,7 +1703,7 @@ impl App {
     }
 
     /// Whether the About page's field is on screen, moving.
-    fn glowing(&self) -> bool {
+    pub fn glowing(&self) -> bool {
         self.glow.is_some() && self.display_on && self.top().1 < self.theme().m.dp(ABOUT_FIELD_DP)
     }
 
@@ -1652,7 +1711,7 @@ impl App {
     /// where it is scrolled: the title once the large one has faded, the bar
     /// once the content slides under it. On the About page both come once
     /// the version has faded out.
-    fn bar_wanted(&self) -> Option<(bool, bool)> {
+    pub fn bar_wanted(&self) -> Option<(bool, bool)> {
         let fr = self.frame.as_ref()?;
         let t = self.theme();
         let scroll = self.top().1;
@@ -1666,7 +1725,7 @@ impl App {
     }
 
     /// Bring the bar and its title in or out as the page scrolls.
-    fn follow_scroll(&mut self, now: u64) {
+    pub fn follow_scroll(&mut self, now: u64) {
         let Some((title, bar)) = self.bar_wanted() else { return };
         self.title.set(title, now);
         self.bar.set(bar, now);
@@ -1677,7 +1736,7 @@ impl App {
 
     /// How far past its end the page shows at `now`: negative past the
     /// top, positive past the bottom.
-    fn overscroll(&self, now: u64) -> f32 {
+    pub fn overscroll(&self, now: u64) -> f32 {
         if self.pull != 0.0 {
             motion::rubber(self.pull, self.h as f32)
         } else {
@@ -1725,7 +1784,7 @@ impl App {
 
     /// What the page shows changed only in rows `first..end`: draw those
     /// again, and the rest stays as drawn.
-    fn refresh_rows(&mut self, first: u32, end: u32) {
+    pub fn refresh_rows(&mut self, first: u32, end: u32) {
         if self.frame.is_none() {
             return;
         }
@@ -1854,11 +1913,33 @@ pub struct Browser {
     pub full_touch: (u16, u16),
     /// The plugin's progress, from 0 to 1.
     pub full_progress: Option<f32>,
+    /// An online plugin download under way, or how it ended.
+    pub plugin_download: Option<PluginDownload>,
     /// The open pages, and which one shows.
     pub tabs: Vec<BrowserTab>,
     pub active: usize,
     /// The start page's shortcuts.
     pub quick: Vec<QuickLink>,
+    /// The pages the browser has read, newest first.
+    pub recent: Vec<BrowserMark>,
+    /// The pages the user has kept.
+    pub bookmarks: Vec<BrowserMark>,
+}
+
+/// A page kept in the browser's history or bookmarks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrowserMark {
+    pub title: String,
+    pub url: String,
+}
+
+/// A plugin package coming from the release server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginDownload {
+    pub done: u64,
+    pub total: Option<u64>,
+    pub speed: u64,
+    pub error: Option<String>,
 }
 
 /// One cookie the browser sends back to a server.
@@ -1908,9 +1989,12 @@ impl Default for Browser {
             full_text: false,
             full_touch: (500, 500),
             full_progress: None,
+            plugin_download: None,
             tabs: vec![BrowserTab::home()],
             active: 0,
             quick: default_quick(),
+            recent: Vec::new(),
+            bookmarks: Vec::new(),
         }
     }
 }
@@ -1939,82 +2023,6 @@ fn default_quick() -> Vec<QuickLink> {
     ]
 }
 
-impl Browser {
-    pub fn page(&self) -> Option<&WebPage> {
-        match &self.view {
-            BrowserView::Page(page) => Some(page),
-            _ => None,
-        }
-    }
-
-    pub fn downloading(&self) -> bool {
-        self.saving.is_some_and(|i| matches!(self.downloads.get(i).map(|d| &d.state), Some(BrowserSave::Downloading { .. })))
-    }
-
-    fn sync_tab(&mut self) {
-        if self.active >= self.tabs.len() {
-            self.tabs.push(BrowserTab::home());
-            self.active = self.tabs.len() - 1;
-        }
-        self.tabs[self.active] = BrowserTab {
-            url: self.url.clone(),
-            address: self.address.clone(),
-            view: self.view.clone(),
-            history: self.history.clone(),
-            at: self.at,
-            form: self.form.clone(),
-            field: self.field,
-        };
-    }
-
-    fn load_tab(&mut self) {
-        let Some(tab) = self.tabs.get(self.active).cloned() else { return };
-        self.url = tab.url;
-        self.address = tab.address;
-        self.view = tab.view;
-        self.history = tab.history;
-        self.at = tab.at;
-        self.form = tab.form;
-        self.field = tab.field;
-    }
-
-    pub fn new_tab(&mut self) {
-        self.sync_tab();
-        self.tabs.push(BrowserTab::home());
-        self.active = self.tabs.len() - 1;
-        self.load_tab();
-    }
-
-    pub fn switch_tab(&mut self, at: usize) {
-        if at >= self.tabs.len() {
-            return;
-        }
-        self.sync_tab();
-        self.active = at;
-        self.load_tab();
-    }
-
-    pub fn close_tab(&mut self, at: usize) {
-        if at >= self.tabs.len() {
-            return;
-        }
-        if self.active == at {
-            self.sync_tab();
-        }
-        self.tabs.remove(at);
-        if self.tabs.is_empty() {
-            self.tabs.push(BrowserTab::home());
-            self.active = 0;
-        } else if self.active > at {
-            self.active -= 1;
-        } else if self.active >= self.tabs.len() {
-            self.active = self.tabs.len() - 1;
-        } else if self.active == at {
-            self.active = self.active.min(self.tabs.len() - 1);
-        }
-        self.load_tab();
-    }
-}
 
 /// Magisk, KernelSU or APatch, and the modules it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2053,8 +2061,4 @@ impl Default for Magisk {
         Magisk { root: MagiskRoot::Unknown, modules: None, version: None, latest: None }
     }
 }
-
-/// How far asking the update server for the newest system has come.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-
 

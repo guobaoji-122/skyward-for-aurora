@@ -528,14 +528,23 @@ fn open_user_files(service: &KeyMint, user: u32, credential: Option<&[u8]>, owne
     }
     protectors = non_weaver;
     protectors.extend(weaver);
-    let mut last = None;
+    // Every protector's failure is kept, so that what is said at last
+    // says why the files did not open. Reporting only the last one hides
+    // the reason that matters most: a credential that does not fit the
+    // screen lock fails on the gatekeeper first, and only the weaver's
+    // refusal is left to tell of it.
+    let mut failures: Vec<String> = Vec::new();
     for protector in &protectors {
         match open_user_files_behind(service, user, protector, credential, owner) {
             Ok(note) => return Ok(note),
-            Err(e) => last = Some(e),
+            Err(e) => failures.push(format!("{}: {e:#}", protector.id)),
         }
     }
-    Err(last.with_context(|| format!("none of user {user}'s {} blobs opened", protectors.len()))?)
+    let mut why = anyhow::anyhow!("none of user {user}'s {} blobs opened", protectors.len());
+    for one in &failures {
+        why = why.context(one.clone());
+    }
+    Err(why)
 }
 
 /// [`open_user_files`] for one protector of the user's.

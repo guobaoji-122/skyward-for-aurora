@@ -1057,7 +1057,7 @@ mod tests {
         assert!(!report.uses(Path::new("/odm_dlkm")), "a longer name is another partition");
         assert!(!sensor.uses(Path::new("/mnt/system")), "its /system/lib64 is the recovery's own");
         assert!(!report.uses(Path::new("/vendor")));
-        let nezha = DeviceConfig::parse(include_str!("../../../devices/nezha.toml")).unwrap();
+        let nezha = DeviceConfig::parse(include_str!("../../../devices/disabled/nezha.toml")).unwrap();
         assert!(nezha.services[0].uses(Path::new("/vendor")), "its shell and its libraries are the vendor partition's");
     }
 }

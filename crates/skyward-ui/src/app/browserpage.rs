@@ -2,222 +2,12 @@
 //! drives them with. Ported from jam's browser work.
 
 use super::*;
-use skyward_net::web::{FileOffer, Opened};
+use skyward_net::web::Opened;
 use crate::icons::Icon;
 use skyward_net::web::Page as WebPage;
 
 
-/// What the browser shows.
 
-#[derive(Clone, Debug, PartialEq)]
-
-pub enum BrowserView {
-    /// The start page: the address, links to sites, what was read before,
-    /// and the downloads.
-    Home,
-    /// A page being read, or a file being looked at, and its address.
-    Loading(String),
-    Page(WebPage),
-    File(FileOffer),
-    /// A page drawn by the external Chromium plugin, shown under the normal
-    /// browser bar and dock.
-    Full,
-    /// The address asked for, and why nothing came back.
-    Failed { url: String, why: String },
-}
-
-/// How a file the browser saves stands.
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-
-pub enum BrowserSave {
-    Downloading { done: u64, total: Option<u64> },
-    Done,
-    Stopped,
-    Failed(String),
-}
-
-/// What the optional Linux Chromium plugin is doing.
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-
-pub enum BrowserFull {
-    /// Not looked for yet.
-    Unknown,
-    /// The plugin is not there: why.
-    Absent(String),
-    /// The plugin's files are there, at this folder.
-    Ready(String),
-    /// The plugin is being fetched or unpacked.
-    Installing { done: u64, total: Option<u64> },
-    /// The plugin is running at this local debugging address.
-    Running(String),
-    Failed(String),
-}
-
-/// Magisk, KernelSU or APatch, and the modules it runs.
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-
-pub enum MagiskRoot {
-    Unknown,
-    Locked,
-    Absent,
-    Present(String),
-}
-
-/// One open page, kept while another tab shows.
-
-#[derive(Clone, Debug, PartialEq)]
-
-pub struct BrowserTab {
-    pub url: String,
-    pub address: String,
-    pub view: BrowserView,
-    pub history: Vec<String>,
-    pub at: usize,
-    pub form: Vec<Vec<String>>,
-    pub field: Option<(usize, usize)>,
-}
-
-/// One of the start page's shortcuts.
-
-#[derive(Clone, Debug, PartialEq)]
-
-pub struct QuickLink {
-    pub title: String,
-    pub url: String,
-    pub color: Rgba,
-    pub icon: Icon,
-}
-
-/// One cookie the browser sends back to a server.
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-
-pub struct Cookie {
-    pub name: String,
-    pub value: String,
-    pub domain: String,
-    pub path: String,
-    /// Seconds since the epoch, or none for the session.
-    pub expires: Option<i64>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-
-pub struct MagiskModule {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub author: String,
-    pub description: String,
-    pub enabled: bool,
-    pub removing: bool,
-    pub path: String,
-}
-
-pub struct Browser {
-    /// What is typed in the address field.
-    pub address: String,
-    /// The address of the page shown.
-    pub url: String,
-    pub view: BrowserView,
-    /// The addresses read, oldest first, and which of them shows.
-    pub history: Vec<String>,
-    pub at: usize,
-    pub downloads: Vec<BrowserDownload>,
-    /// The download under way, by its place in `downloads`.
-    pub saving: Option<usize>,
-    /// The values typed into the page's form fields, by form and field.
-    pub form: Vec<Vec<String>>,
-    /// Which field the keyboard types into, where one is chosen.
-    pub field: Option<(usize, usize)>,
-    /// The cookie jar: name, value, domain, path, and when it expires.
-    pub cookies: Vec<Cookie>,
-    /// The plugin's state, and where it was found or why it is not there.
-    pub full: BrowserFull,
-    /// The last page the plugin rendered, as PNG.
-    pub full_shot: Option<Vec<u8>>,
-    /// Whether the page shown is the plugin's, and new addresses go to it.
-    pub full_active: bool,
-    /// The plugin page's CSS zoom, changed by the full-mode zoom buttons.
-    pub full_zoom: f32,
-    /// The keyboard is typing into the plugin page's focused field.
-    pub full_text: bool,
-    /// The last place tapped on the plugin page, in per-mille.
-    pub full_touch: (u16, u16),
-    /// The plugin's progress, from 0 to 1.
-    pub full_progress: Option<f32>,
-    /// The open pages, and which one shows.
-    pub tabs: Vec<BrowserTab>,
-    pub active: usize,
-    /// The start page's shortcuts.
-    pub quick: Vec<QuickLink>,
-}
-
-/// One cookie the browser sends back to a server.
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-
-
-
-/// What the optional Linux Chromium plugin is doing.
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-
-
-
-impl Default for Browser {
-    fn default() -> Self {
-        Browser {
-            address: String::new(),
-            url: String::new(),
-            view: BrowserView::Home,
-            history: Vec::new(),
-            at: 0,
-            downloads: Vec::new(),
-            saving: None,
-            form: Vec::new(),
-            field: None,
-            cookies: Vec::new(),
-            full: BrowserFull::Unknown,
-            full_shot: None,
-            full_active: false,
-            full_zoom: 1.0,
-            full_text: false,
-            full_touch: (500, 500),
-            full_progress: None,
-            tabs: vec![BrowserTab::home()],
-            active: 0,
-            quick: default_quick(),
-        }
-    }
-}
-
-fn default_quick() -> Vec<QuickLink> {
-    vec![
-        QuickLink { title: "GitHub".into(), url: "https://github.com".into(), color: Rgba::rgb(0x34, 0x82, 0xff), icon: Icon::Globe },
-        QuickLink {
-            title: "Skyward".into(),
-            url: "https://github.com/kirklin/skyward".into(),
-            color: Rgba::rgb(0x77, 0x67, 0xf9),
-            icon: Icon::Layers,
-        },
-        QuickLink {
-            title: "LineageOS".into(),
-            url: "https://download.lineageos.org".into(),
-            color: Rgba::rgb(0x1d, 0xcd, 0x3a),
-            icon: Icon::Install,
-        },
-        QuickLink {
-            title: "Bing".into(),
-            url: "https://www.bing.com".into(),
-            color: Rgba::rgb(0xff, 0x69, 0x00),
-            icon: Icon::Globe,
-        },
-    ]
-}
 
 impl Browser {
     pub fn page(&self) -> Option<&WebPage> {
@@ -296,98 +86,7 @@ impl Browser {
     }
 }
 
-pub struct Magisk {
-    pub root: MagiskRoot,
-    /// The modules found, or why they could not be read.
-    pub modules: Option<Result<Vec<MagiskModule>, String>>,
-    /// The installed Magisk version, when Magisk is the root solution.
-    pub version: Option<String>,
-    /// The newest Magisk release found, if it has been checked.
-    pub latest: Option<String>,
-}
 
-impl Default for Magisk {
-    fn default() -> Self {
-        Magisk { root: MagiskRoot::Unknown, modules: None, version: None, latest: None }
-    }
-}
-
-impl Browser {
-    pub fn page(&self) -> Option<&WebPage> {
-        match &self.view {
-            BrowserView::Page(page) => Some(page),
-            _ => None,
-        }
-    }
-
-    pub fn downloading(&self) -> bool {
-        self.saving.is_some_and(|i| matches!(self.downloads.get(i).map(|d| &d.state), Some(BrowserSave::Downloading { .. })))
-    }
-
-    fn sync_tab(&mut self) {
-        if self.active >= self.tabs.len() {
-            self.tabs.push(BrowserTab::home());
-            self.active = self.tabs.len() - 1;
-        }
-        self.tabs[self.active] = BrowserTab {
-            url: self.url.clone(),
-            address: self.address.clone(),
-            view: self.view.clone(),
-            history: self.history.clone(),
-            at: self.at,
-            form: self.form.clone(),
-            field: self.field,
-        };
-    }
-
-    fn load_tab(&mut self) {
-        let Some(tab) = self.tabs.get(self.active).cloned() else { return };
-        self.url = tab.url;
-        self.address = tab.address;
-        self.view = tab.view;
-        self.history = tab.history;
-        self.at = tab.at;
-        self.form = tab.form;
-        self.field = tab.field;
-    }
-
-    pub fn new_tab(&mut self) {
-        self.sync_tab();
-        self.tabs.push(BrowserTab::home());
-        self.active = self.tabs.len() - 1;
-        self.load_tab();
-    }
-
-    pub fn switch_tab(&mut self, at: usize) {
-        if at >= self.tabs.len() {
-            return;
-        }
-        self.sync_tab();
-        self.active = at;
-        self.load_tab();
-    }
-
-    pub fn close_tab(&mut self, at: usize) {
-        if at >= self.tabs.len() {
-            return;
-        }
-        if self.active == at {
-            self.sync_tab();
-        }
-        self.tabs.remove(at);
-        if self.tabs.is_empty() {
-            self.tabs.push(BrowserTab::home());
-            self.active = 0;
-        } else if self.active > at {
-            self.active -= 1;
-        } else if self.active >= self.tabs.len() {
-            self.active = self.tabs.len() - 1;
-        } else if self.active == at {
-            self.active = self.active.min(self.tabs.len() - 1);
-        }
-        self.load_tab();
-    }
-}
 
 /// Whether a folder is on the OTG drive, which the file manager reads with
 
@@ -435,37 +134,8 @@ fn chromium_url(url: &str) -> String {
     url
 }
 
-const SNUG: u32 = 3200;
-
-    #[test]
-    fn a_home_page_grown_by_an_update_notice_scrolls_down_to_its_last_row() {
-        let f = fonts();
-        let plain = info();
-        let mut app = App::new(Screen::Home, W, SNUG, PPD);
-        let fr = app.frame(&f, &plain);
-        let reboot = fr.hits.iter().find(|h| h.action == Action::Open(Screen::Reboot)).expect("a reboot row").rect;
-        assert!(reboot.y + reboot.h <= SNUG as f32, "without the notice the rows fit the screen");
-        let i = DeviceInfo { snapshot: SnapshotState::Snapshotted, ..info() };
-        let mut app = App::new(Screen::Home, W, SNUG, PPD);
-        let fr = app.frame(&f, &i);
-        let reboot = fr.hits.iter().find(|h| h.action == Action::Open(Screen::Reboot)).expect("a reboot row").rect;
-        assert!(reboot.y + reboot.h > SNUG as f32, "the notice pushes the last row below the screen");
-        assert!(reboot.y + reboot.h <= fr.canvas.h as f32, "the page is drawn down to it");
-        app.touch(Touch::Down(700.0, 2800.0), &f, 0);
-        app.touch(Touch::Move(700.0, 2000.0), &f, 0);
-        app.touch(Touch::Move(700.0, 1200.0), &f, 0);
-        app.touch(Touch::Up, &f, 0);
-        for ms in (0..3000).step_by(8) {
-            app.tick(ms);
-        }
-        let (_, y) = spot(&mut app, &f, &i, Action::Open(Screen::Reboot));
-        assert!(y < SNUG as f32, "scrolled up into view");
-        tap_at(&mut app, &f, &i, Action::Open(Screen::Reboot), 3000);
-        assert_eq!(app.screen(), Screen::Reboot);
-    }
-
 impl App {
-fn set_magisk(&mut self, root: MagiskRoot, modules: Result<Vec<MagiskModule>, String>) {
+pub fn set_magisk(&mut self, root: MagiskRoot, modules: Result<Vec<MagiskModule>, String>) {
         let version = self.state.magisk.version.clone();
         let latest = self.state.magisk.latest.clone();
         self.state.magisk = Magisk { root, modules: Some(modules), version, latest };
@@ -474,25 +144,25 @@ fn set_magisk(&mut self, root: MagiskRoot, modules: Result<Vec<MagiskModule>, St
         }
     }
 
-fn set_magisk_version(&mut self, version: Option<String>) {
+pub fn set_magisk_version(&mut self, version: Option<String>) {
         self.state.magisk.version = version;
         if self.screen() == Screen::Magisk {
             self.refresh();
         }
     }
 
-fn set_magisk_latest(&mut self, latest: Option<String>) {
+pub fn set_magisk_latest(&mut self, latest: Option<String>) {
         self.state.magisk.latest = latest;
         if self.screen() == Screen::Magisk {
             self.refresh();
         }
     }
 
-fn install_downloaded(&mut self, path: String, size: u64, now: u64) -> Vec<Effect> {
+pub fn install_downloaded(&mut self, path: String, size: u64, now: u64) -> Vec<Effect> {
         self.install_opened(path, size, now)
     }
 
-fn browser_go(&mut self, input: &str, now: u64) -> Vec<Effect> {
+pub fn browser_go(&mut self, input: &str, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         if self.state.browser.full_text {
             let text = input.trim().to_string();
@@ -518,7 +188,7 @@ fn browser_go(&mut self, input: &str, now: u64) -> Vec<Effect> {
         self.browser_read(url)
     }
 
-fn browser_read(&mut self, url: String) -> Vec<Effect> {
+pub fn browser_read(&mut self, url: String) -> Vec<Effect> {
         let url = if self.state.browser.full_active { chromium_url(&url) } else { url };
         let full = {
             let b = &mut self.state.browser;
@@ -567,7 +237,7 @@ fn browser_read(&mut self, url: String) -> Vec<Effect> {
         vec![Effect::BrowserOpen { url, cookie }]
     }
 
-fn browser_step(&mut self, at: usize, now: u64) -> Vec<Effect> {
+pub fn browser_step(&mut self, at: usize, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         if self.state.browser.history.is_empty() || at >= self.state.browser.history.len() {
             self.say(l.pick(["没有更多页面了", "沒有更多頁面了", "There's no page that way"]), now);
@@ -612,7 +282,7 @@ fn browser_step(&mut self, at: usize, now: u64) -> Vec<Effect> {
         vec![Effect::BrowserOpen { url, cookie }]
     }
 
-fn browser_download(&mut self, url: String, name: String, now: u64) -> Vec<Effect> {
+pub fn browser_download(&mut self, url: String, name: String, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         if self.state.browser.downloading() {
             self.say(l.pick(["已有文件正在下载", "已有檔案正在下載", "A file is being downloaded already"]), now);
@@ -642,15 +312,17 @@ fn browser_download(&mut self, url: String, name: String, now: u64) -> Vec<Effec
         vec![Effect::BrowserDownload { url, name, path }]
     }
 
-fn browser_opened(&mut self, opened: Result<Opened, String>) {
+pub fn browser_opened(&mut self, opened: Result<Opened, String>) {
         {
             let b = &mut self.state.browser;
             match opened {
                 Ok(Opened::Page(page)) => {
                     let url = page.url.clone();
+                    let title = page.title.clone();
                     if let Some(slot) = b.history.get_mut(b.at) {
                         *slot = url.clone();
                     }
+                    remember(&mut b.recent, &title, &url);
                     b.url = url.clone();
                     b.address = url;
                     b.form = page
@@ -676,6 +348,7 @@ fn browser_opened(&mut self, opened: Result<Opened, String>) {
                     if let Some(slot) = b.history.get_mut(b.at) {
                         *slot = url.clone();
                     }
+                    remember(&mut b.recent, &file.name, &url);
                     b.url = url.clone();
                     b.address = url;
                     b.view = BrowserView::File(file);
@@ -692,7 +365,7 @@ fn browser_opened(&mut self, opened: Result<Opened, String>) {
         self.refresh();
     }
 
-fn browser_saved(&mut self, done: u64, total: Option<u64>) {
+pub fn browser_saved(&mut self, done: u64, total: Option<u64>) {
         let Some(i) = self.state.browser.saving else { return };
         let Some(d) = self.state.browser.downloads.get_mut(i) else { return };
         d.done = done;
@@ -705,7 +378,7 @@ fn browser_saved(&mut self, done: u64, total: Option<u64>) {
         }
     }
 
-fn browser_save_ended(&mut self, outcome: Result<u64, String>, now: u64) {
+pub fn browser_save_ended(&mut self, outcome: Result<u64, String>, now: u64) {
         let Some(i) = self.state.browser.saving.take() else { return };
         let l = self.state.lang;
         if let Some(d) = self.state.browser.downloads.get_mut(i) {
@@ -731,7 +404,7 @@ fn browser_save_ended(&mut self, outcome: Result<u64, String>, now: u64) {
         self.refresh();
     }
 
-fn browser_open_download(&mut self, i: usize, now: u64) -> Vec<Effect> {
+pub fn browser_open_download(&mut self, i: usize, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         let Some(d) = self.state.browser.downloads.get(i) else { return Vec::new() };
         let (name, path, size, state) = (d.name.clone(), d.path.clone(), d.done, d.state.clone());
@@ -756,7 +429,7 @@ fn browser_open_download(&mut self, i: usize, now: u64) -> Vec<Effect> {
         }
     }
 
-fn browser_submit(&mut self, form: usize, now: u64) -> Vec<Effect> {
+pub fn browser_submit(&mut self, form: usize, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         let Some(page) = self.state.browser.page() else { return Vec::new() };
         let Some(f) = page.forms.get(form) else { return Vec::new() };
@@ -787,7 +460,7 @@ fn browser_submit(&mut self, form: usize, now: u64) -> Vec<Effect> {
         vec![Effect::BrowserSubmit { url, fields, post, cookie }]
     }
 
-fn browser_cookie(&self, url: &str) -> Option<String> {
+pub fn browser_cookie(&self, url: &str) -> Option<String> {
         let pairs: Vec<(String, String, String, String)> = self
             .state
             .browser
@@ -798,7 +471,7 @@ fn browser_cookie(&self, url: &str) -> Option<String> {
         skyward_net::web::cookie_header(&pairs, url)
     }
 
-fn browser_check_full(&mut self) {
+pub fn browser_check_full(&mut self) {
         let path = "/data/media/0/Skyward/plugins/chromium";
         if !self.state.data.storage_open() {
             self.state.browser.full = BrowserFull::Absent(
@@ -813,7 +486,7 @@ fn browser_check_full(&mut self) {
         }
     }
 
-fn browser_plugin_install(&mut self, now: u64) -> Vec<Effect> {
+pub fn browser_plugin_install(&mut self, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         if !self.state.data.storage_open() {
             self.say(l.pick(["请先解密 data 分区", "請先解密 data 分割區", "Decrypt the data partition first"]), now);
@@ -844,7 +517,7 @@ fn browser_plugin_install(&mut self, now: u64) -> Vec<Effect> {
         vec![Effect::BrowserPluginInstall { archive: archive.into(), dir: dir.into() }]
     }
 
-fn browser_plugin_start(&mut self, now: u64) -> Vec<Effect> {
+pub fn browser_plugin_start(&mut self, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         if !self.state.online() {
             self.say(l.pick(["需先连接 WLAN", "需先連接 Wi-Fi", "Connect to Wi-Fi first"]), now);
@@ -861,7 +534,7 @@ fn browser_plugin_start(&mut self, now: u64) -> Vec<Effect> {
         self.browser_plugin_start_at(url, now)
     }
 
-fn browser_plugin_tap(&mut self, x: u16, y: u16, now: u64) -> Vec<Effect> {
+pub fn browser_plugin_tap(&mut self, x: u16, y: u16, now: u64) -> Vec<Effect> {
         if self.state.browser.url.is_empty() || self.state.browser.full_shot.is_none() {
             return Vec::new();
         }
@@ -871,7 +544,7 @@ fn browser_plugin_tap(&mut self, x: u16, y: u16, now: u64) -> Vec<Effect> {
         vec![Effect::BrowserPluginTap { x, y }]
     }
 
-fn browser_plugin_start_at(&mut self, url: String, now: u64) -> Vec<Effect> {
+pub fn browser_plugin_start_at(&mut self, url: String, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         if !self.state.online() {
             self.say(l.pick(["需先连接 WLAN", "需先連接 Wi-Fi", "Connect to Wi-Fi first"]), now);
@@ -905,7 +578,7 @@ fn browser_plugin_start_at(&mut self, url: String, now: u64) -> Vec<Effect> {
         vec![Effect::BrowserPluginStart { dir, url, out }]
     }
 
-fn browser_plugin_stop(&mut self) -> Vec<Effect> {
+pub fn browser_plugin_stop(&mut self) -> Vec<Effect> {
         if let BrowserFull::Running(_) = self.state.browser.full {
             self.state.browser.full = BrowserFull::Absent("已停止".into());
             self.state.browser.full_progress = None;
@@ -915,7 +588,7 @@ fn browser_plugin_stop(&mut self) -> Vec<Effect> {
         vec![Effect::BrowserPluginStop]
     }
 
-fn browser_plugin_remove(&mut self, now: u64) -> Vec<Effect> {
+pub fn browser_plugin_remove(&mut self, now: u64) -> Vec<Effect> {
         let _ = now;
         let dir = "/data/media/0/Skyward/plugins/chromium";
         self.state.browser.full = BrowserFull::Absent("插件尚未安装".into());
@@ -925,7 +598,7 @@ fn browser_plugin_remove(&mut self, now: u64) -> Vec<Effect> {
         vec![Effect::BrowserPluginRemove { dir: dir.into() }]
     }
 
-fn browser_plugin_installed(&mut self, ended: Result<(), String>) {
+pub fn browser_plugin_installed(&mut self, ended: Result<(), String>) {
         self.state.browser.full = match ended {
             Ok(()) => BrowserFull::Ready("/data/media/0/Skyward/plugins/chromium".into()),
             Err(why) => BrowserFull::Failed(why),
@@ -934,7 +607,7 @@ fn browser_plugin_installed(&mut self, ended: Result<(), String>) {
         self.refresh();
     }
 
-fn browser_plugin_focus(&mut self, focus: bool) {
+pub fn browser_plugin_focus(&mut self, focus: bool) {
         if focus
             && self.state.browser.full_active
             && !self.state.browser.full_text
@@ -948,7 +621,7 @@ fn browser_plugin_focus(&mut self, focus: bool) {
         }
     }
 
-fn browser_plugin_shot(&mut self, shot: Result<Vec<u8>, String>) {        match shot {
+pub fn browser_plugin_shot(&mut self, shot: Result<Vec<u8>, String>) {        match shot {
             Ok(png) => {
                 self.state.browser.full_shot = Some(png);
                 self.state.browser.full_progress = Some(1.0);
@@ -972,4 +645,81 @@ fn browser_plugin_shot(&mut self, shot: Result<Vec<u8>, String>) {        match 
         }
         self.refresh();
     }
+
+    /// Whether a double tap should light a dark panel, so the runtime keeps
+    /// the touch controller reporting while the panel is off.
+    pub fn double_tap_wake(&self) -> bool {
+        self.state.double_tap
+    }
+
+    /// How far the clock face follows a finger on a dark panel, if at all.
+    pub fn aod_drag(&self) -> Option<f32> {
+        self.aod_drag
+    }
+
+    /// The next package waiting in an install queue, if a queue is running
+    /// and the install that just ended went through.
+    pub fn queued_next(&mut self) -> Option<String> {
+        if !self.state.queue_active {
+            return None;
+        }
+        let through = match &self.state.install {
+            Install::Finished { outcome, .. } => {
+                matches!(outcome, Outcome::Installed { .. } | Outcome::Flashed { .. } | Outcome::Ran { .. })
+            }
+            _ => return None,
+        };
+        if !through {
+            if let Some(name) = &self.state.package_name {
+                self.state.queue_stopped = Some(name.clone());
+            }
+            self.state.queue_active = false;
+            return None;
+        }
+        let Some(next) = self.state.queue.first().cloned() else {
+            self.state.queue_active = false;
+            return None;
+        };
+        self.state.queue.remove(0);
+        self.state.queue_stopped = None;
+        let (path, name) = (next.path, next.name);
+        self.begin_install(Install::Checking { size: next.size, stage: None }, next.source, Some(name));
+        Some(path)
+    }
+
+    /// How far the plugin package's download has come.
+    pub fn plugin_saved(&mut self, done: u64, total: Option<u64>, speed: u64) {
+        if let Some(d) = self.state.browser.plugin_download.as_mut() {
+            d.done = done;
+            d.total = total;
+            d.speed = speed;
+            d.error = None;
+            if self.screen() == Screen::BrowserFull {
+                self.refresh();
+            }
+        }
+    }
+
+    /// The plugin package finished, or why it did not.
+    pub fn plugin_downloaded(&mut self, ended: Result<(), String>) {
+        if let Some(d) = self.state.browser.plugin_download.as_mut() {
+            if let Err(why) = ended {
+                d.error = Some(why);
+            }
+        }
+        if self.screen() == Screen::BrowserFull {
+            self.refresh();
+        }
+    }
+}
+
+/// Keep a page in the browser's history or bookmarks, newest first: the
+/// same page read again moves to the front rather than standing twice.
+pub fn remember(list: &mut Vec<BrowserMark>, title: &str, url: &str) {
+    if url.is_empty() {
+        return;
+    }
+    list.retain(|mark| mark.url != url);
+    list.insert(0, BrowserMark { title: title.to_string(), url: url.to_string() });
+    list.truncate(60);
 }

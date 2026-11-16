@@ -5,9 +5,52 @@ use super::*;
 
 impl App {
     pub fn touch(&mut self, ev: Touch, f: &Fonts, now: u64) -> Vec<Effect> {
-        // A finger on the dark panel lights nothing, as on the phone's own
-        // system, where the power key lights it.
+        // A double tap lights the dark panel; with the gesture turned off,
+        // a swipe up is the way in, as on the phone's own always-on display.
         if !self.display_on {
+            let m = self.theme().m;
+            let swipe = m.dp(super::aurora::WAKE_SWIPE_DP);
+            // With the double tap offered it alone lights the panel; with it
+            // turned off, the face follows a finger swiped up until it wakes.
+            let swipe_wakes = !self.state.double_tap;
+            match ev {
+                Touch::Down(x, y) => {
+                    if self.state.double_tap {
+                        self.double_tap.set_slop(m.dp(crate::doubletap::DOUBLE_TAP_SLOP_DP));
+                        self.double_tap.down(x, y, now);
+                    }
+                    self.aod_start = Some(y);
+                    self.aod_drag = None;
+                }
+                Touch::Move(x, y) => {
+                    if self.state.double_tap {
+                        self.double_tap.move_to(x, y, m.dp(crate::doubletap::TAP_SLOP_DP));
+                    }
+                    if let Some(start) = self.aod_start {
+                        let gone = (start - y).max(0.0);
+                        if swipe_wakes {
+                            if gone > swipe {
+                                self.aod_start = None;
+                                self.aod_drag = None;
+                                self.wake(now);
+                            } else {
+                                self.aod_drag = Some(gone);
+                                self.dirty = true;
+                            }
+                        }
+                    }
+                }
+                Touch::Up => {
+                    if self.state.double_tap && self.double_tap.up(now) {
+                        self.double_tap.reset();
+                        // No lock screen: the panel comes up onto the page
+                        // it went dark on.
+                        self.wake(now);
+                    }
+                    self.aod_start = None;
+                    self.aod_drag = None;
+                }
+            }
             return Vec::new();
         }
         // A finger on the charging screen sends it away for the page, and

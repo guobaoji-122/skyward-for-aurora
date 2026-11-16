@@ -42,7 +42,7 @@ pub struct Queued {
     /// Where it came from, which the install page says beside it.
     pub source: Source,
 }
-const WAKE_SWIPE_DP: f32 = 64.0;
+pub(super) const WAKE_SWIPE_DP: f32 = 64.0;
 
 /// Where the AOD sits, in dp from its usual place, one each minute in
 /// turn, so no pixel holds the light long enough to burn into the panel.

@@ -68,7 +68,7 @@ groups = ["root"]
 # and the key service is what the data partition opens with.
 [[service]]
 path = "/system/bin/sh"
-args = ["-c", "mkdir -p /kmlibs && cp /mnt/system/system/lib64/libhardware.so /mnt/system/system/lib64/libvndksupport.so /mnt/system/system/lib64/libnetutils.so /mnt/system/system/lib64/bootstrap/libdl_android.so /kmlibs/ && printf '[recovery]\\nnamespace.default.isolated = false\\n' > /kmlibs/ld.config.txt && printf '#!/system/bin/sh\\nexport LD_CONFIG_FILE=/kmlibs/ld.config.txt\\nexec \"$@\"\\n' > /kmlibs/km.sh && chmod 755 /kmlibs/km.sh"]
+args = ["-c", "mkdir -p /kmlibs && cp /mnt/system/system/lib64/libhardware.so /mnt/system/system/lib64/libvndksupport.so /mnt/system/system/lib64/libdmabufheap.so /mnt/system/system/lib64/libc++.so /mnt/system/system/lib64/libnetutils.so /mnt/system/system/lib64/bootstrap/libdl_android.so /kmlibs/ && cp /mnt/system/system/lib64/libc++_shared.so /kmlibs/ 2>/dev/null || true && printf '[recovery]\\nnamespace.default.isolated = false\\n' > /kmlibs/ld.config.txt && printf '#!/system/bin/sh\\nexport LD_CONFIG_FILE=/kmlibs/ld.config.txt\\nexec \"$@\"\\n' > /kmlibs/km.sh && chmod 755 /kmlibs/km.sh && chmod 755 /kmlibs && chmod 644 /kmlibs/*.so /kmlibs/ld.config.txt && chmod 755 /kmlibs/km.sh"]
 oneshot = true
 user = "root"
 groups = ["root"]
@@ -84,7 +84,7 @@ groups = ["root"]
 # failing the services after it.
 [[service]]
 path = "/system/bin/sh"
-args = ["-c", "V=$(ls -d /system_dlkm/lib/modules/*/kernel/net/rfkill 2>/dev/null | head -1); [ -n \"$V\" ] || { echo \"no rfkill.ko under /system_dlkm/lib/modules\"; exit 0; }; T=/system_dlkm/flatten/lib/modules/rfkill.ko; if [ -f \"$T\" ]; then mount --bind \"$V/rfkill.ko\" \"$T\" || { echo \"could not lay it over $T\"; exit 0; }; else mkdir -p /lib/modules || { echo \"could not make /lib/modules\"; exit 0; }; cp \"$V/rfkill.ko\" /lib/modules/rfkill.ko || { echo \"could not copy rfkill.ko\"; exit 0; }; printf 'rfkill.ko:\\n' > /lib/modules/modules.dep || { echo \"could not write modules.dep\"; exit 0; }; echo \"put the signed rfkill.ko in /lib/modules\"; fi"]
+args = ["-c", "V=$(ls -d /system_dlkm/lib/modules/*/kernel/net/rfkill 2>/dev/null | head -1); [ -n \"$V\" ] || { echo \"no rfkill.ko under /system_dlkm/lib/modules\"; exit 0; }; mkdir -p /lib/modules || { echo \"could not make /lib/modules\"; exit 0; }; cp \"$V/rfkill.ko\" /lib/modules/rfkill.ko || { echo \"could not copy rfkill.ko\"; exit 0; }; printf 'rfkill.ko:\\n' > /lib/modules/modules.dep || { echo \"could not write modules.dep\"; exit 0; }; echo \"put the signed rfkill.ko in /lib/modules\""]
 oneshot = true
 user = "root"
 groups = ["root"]

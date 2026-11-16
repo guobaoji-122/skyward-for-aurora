@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use skyward_net::http::{self, Servers};
 use skyward_net::web::{self, Opened, Saving};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::ToSocketAddrs;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
@@ -41,8 +41,11 @@ pub enum Task {
     FullTap { x: u16, y: u16 },
     FullPinch { scale: f64 },
     FullText { text: String },
+    FullScroll { dy: i64 },
     FullReload,
     FullStop,
+    /// Fetch the plugin package from a release URL.
+    PluginDownload { url: String, path: PathBuf },
 }
 
 pub enum Event {
@@ -58,6 +61,10 @@ pub enum Event {
     Shot(Result<Vec<u8>, String>),
     /// A text field on the plugin page took focus.
     Focus(bool),
+    /// How far the plugin package download has come.
+    PluginSaved { done: u64, total: Option<u64>, speed: u64 },
+    /// The plugin package finished, or why it did not.
+    PluginEnded(Result<(), String>),
 }
 
 struct FullSession {
@@ -399,6 +406,22 @@ impl Worker {
                             }
                         }
                     }
+                    Task::FullScroll { dy } => {
+                        let result = Cdp::connect().and_then(|mut cdp| {
+                            cdp.scroll(dy)?;
+                            Ok(full_result(&mut cdp))
+                        });
+                        match result {
+                            Ok((png, focus)) => {
+                                tell(Event::Shot(png));
+                                tell(Event::Focus(focus));
+                            }
+                            Err(e) => {
+                                stop_full();
+                                tell(Event::Shot(Err(format!("{e:#}"))));
+                            }
+                        }
+                    }
                     Task::FullReload => {
                         let result = Cdp::connect().and_then(|mut cdp| {
                             cdp.reload()?;
@@ -414,6 +437,10 @@ impl Worker {
                                 tell(Event::Shot(Err(format!("{e:#}"))));
                             }
                         }
+                    }
+                    Task::PluginDownload { url, path } => {
+                        let ended = fetch_plugin(&url, &path, &tell);
+                        tell(Event::PluginEnded(ended));
                     }
                     Task::FullStop => stop_full(),
                 }
@@ -444,8 +471,20 @@ impl Worker {
 
 impl Drop for Worker {
     fn drop(&mut self) {
+        // A page left in the middle of a request must not hold the UI up.
+        // The request is cut first, then the worker is given a moment to
+        // end. A full-mode Chromium can take a minute to give up; joining
+        // it here would freeze the screen for as long as that takes, so it
+        // is left to finish on its own once the moment has passed.
+        self.stop();
         if let Some(thread) = self.thread.take() {
-            thread.join().expect("the browser's worker does not panic");
+            let until = Instant::now() + Duration::from_millis(200);
+            while !thread.is_finished() && Instant::now() < until {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if thread.is_finished() {
+                thread.join().expect("the browser's worker does not panic");
+            }
         }
     }
 }
@@ -480,6 +519,46 @@ fn run(command: &str, args: &[&str]) -> Result<(), String> {    let output = std
         let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(if err.is_empty() { format!("{command} exited {}", output.status) } else { err })
     }
+}
+
+fn fetch_plugin(url: &str, path: &Path, tell: &dyn Fn(Event)) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("make {}: {e}", parent.display()))?;
+    }
+    let agent = ureq::Agent::new_with_defaults();
+    let mut response = agent
+        .get(url)
+        .header("User-Agent", "Skyward")
+        .call()
+        .map_err(|e| format!("{e}"))?;
+    let total = response
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    let mut file = std::fs::File::create(path).map_err(|e| format!("make {}: {e}", path.display()))?;
+    let mut body = response.body_mut().as_reader();
+    let started = Instant::now();
+    let mut done = 0u64;
+    let mut last = Instant::now() - Duration::from_secs(1);
+    let mut chunk = vec![0u8; 128 * 1024];
+    loop {
+        let n = body.read(&mut chunk).map_err(|e| format!("read {url}: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&chunk[..n]).map_err(|e| format!("write {}: {e}", path.display()))?;
+        done += n as u64;
+        if last.elapsed() >= Duration::from_millis(200) {
+            let speed = (done as f64 / started.elapsed().as_secs_f64().max(0.001)) as u64;
+            tell(Event::PluginSaved { done, total, speed });
+            last = Instant::now();
+        }
+    }
+    file.sync_all().ok();
+    let speed = (done as f64 / started.elapsed().as_secs_f64().max(0.001)) as u64;
+    tell(Event::PluginSaved { done, total: total.or(Some(done)), speed });
+    Ok(())
 }
 
 fn run_env_timeout(command: &str, args: &[&str], key: &str, value: &str, timeout: Duration) -> Result<(), String> {

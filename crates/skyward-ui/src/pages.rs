@@ -122,6 +122,9 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::BrowserFull => crate::browser::full(cx),
         Screen::BrowserTabs => crate::browser::tabs(cx),
         Screen::BrowserQuick => crate::browser::quick(cx),
+        Screen::BrowserMenu => crate::browser::menu(cx),
+        Screen::BrowserHistory => crate::browser::marks(cx, true),
+        Screen::BrowserBookmarks => crate::browser::marks(cx, false),
     }
 }
 
@@ -204,7 +207,8 @@ const SCREEN_TIMEOUT: Text = ["息屏时间", "螢幕自動關閉", "Screen time
 const UPDATE: Text = ["系统更新", "系統更新", "System update"];
 const SKYWARD_UPDATE: Text = ["Skyward 更新", "Skyward 更新", "Skyward update"];
 const FILES: Text = ["文件管理", "檔案管理", "File manager"];
-const BROWSER: Text = ["浏览器", "瀏覽器", "Browser"];
+// Browser entry removed from home; constant kept out of use.
+// const BROWSER: Text = ["浏览器", "瀏覽器", "Browser"];
 const TERMINAL: Text = ["终端", "終端機", "Terminal"];
 const LANGUAGE: Text = ["语言", "語言", "Language"];
 const TIME_ZONE: Text = ["时区", "時區", "Time zone"];
@@ -307,12 +311,9 @@ pub fn home(cx: &Ctx) -> Frame {
         rows.push(Row::new(l.pick(WLAN)).icon(BLUE, Icon::Wlan).trail(Trail::Value(fmt::wlan_value(l, w))));
         opens.push(Action::Open(Screen::Wlan));
     }
-    rows.push(
-        Row::new(l.pick(BROWSER))
-            .icon(BLUE, Icon::Globe)
-            .subtitle(l.pick(["网页、搜索和下载", "網頁、搜尋和下載", "Pages, search and downloads"])),
-    );
-    opens.push(Action::Open(Screen::Browser));
+    // Browser entry removed: the port's full-mode browser needs a missing
+    // /skyward/payload.zip and was unusable on-device; keep the page code but
+    // stop offering it from the home screen so it cannot be opened by tap.
     let starts = systems_value(cx);
     if cx.state.offers(Screen::Systems) {
         let row = Row::new(l.pick(DUAL_BOOT)).icon(PURPLE, Icon::Systems);
@@ -1099,7 +1100,7 @@ fn percent(share: f32) -> u32 {
 fn update_stage(l: Lang, stage: Option<&Stage>) -> (String, Option<f32>) {
     match stage {
         Some(Stage::Writing { done, total }) => {
-            let s = share(done, total);
+            let s = share(*done, *total);
             let p = percent(s);
             (tr!(l, "第 1 步，共 3 步：写入新系统 {p}%", "第 1 步，共 3 步：寫入新系統 {p}%", "Step 1 of 3: writing the new system {p}%"), Some(s))
         }
@@ -1171,7 +1172,7 @@ fn reflashed(c: &mut Canvas, cx: &Ctx, y: f32) -> f32 {
         Some(Reflash::Failed(why)) => {
             let note = l.pick(["未能将 Skyward 重新刷入 recovery 分区。", "無法將 Skyward 重新刷入 recovery 分割區。", "Couldn't flash Skyward back into the recovery partitions."]);
             let y = widgets::footnote(c, t, f, y, note);
-            widgets::footnote(c, t, f, y, why)
+            widgets::footnote(c, t, f, y, &why)
         }
     }
 }
@@ -1285,7 +1286,7 @@ pub fn installing(cx: &Ctx) -> Frame {
             widgets::footnote(&mut c, t, f, y, note)
         }
         Install::Checking { stage: Some(Stage::Signature { done, total }), .. } => {
-            let read = share(done, total);
+            let read = share(*done, *total);
             let p = percent(read);
             let detail = tr!(l, "已读取 {p}%", "已讀取 {p}%", "{p}% read");
             let y = widgets::progress_card(&mut c, t, f, top, l.pick(["正在验证签名", "正在驗證簽章", "Verifying the signature"]), &detail, Some(read));
@@ -1422,7 +1423,7 @@ pub fn installing(cx: &Ctx) -> Frame {
                 Some(Stage::Flashing { done, total }) => {
                     let s = share(*done, *total);
                     let p = percent(s);
-                    let detail = match done * 2 < total {
+                    let detail = match *done * 2 < *total {
                         true => tr!(l, "正在写入 {p}%", "正在寫入 {p}%", "Writing {p}%"),
                         false => tr!(l, "正在校验 {p}%", "正在驗證 {p}%", "Verifying {p}%"),
                     };

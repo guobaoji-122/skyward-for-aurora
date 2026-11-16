@@ -13,6 +13,11 @@ use std::time::{Duration, Instant};
 const PORT: u16 = 9222;
 const VIEW_W: u32 = 412;
 const VIEW_H: u32 = 915;
+/// Render at a phone density; a whole-page frame is kept small enough to
+/// decode comfortably in recovery memory.
+const DEVICE_SCALE: f64 = 2.0;
+/// A full-page capture is capped so one frame cannot exhaust recovery memory.
+const MAX_PAGE_CSS: f64 = 2500.0;
 
 pub struct Cdp {
     stream: TcpStream,
@@ -52,7 +57,7 @@ impl Cdp {
         cdp.call("Page.enable", json!({}))?;
         cdp.call(
             "Emulation.setDeviceMetricsOverride",
-            json!({"width": VIEW_W, "height": VIEW_H, "deviceScaleFactor": 1, "mobile": true}),
+            json!({"width": VIEW_W, "height": VIEW_H, "deviceScaleFactor": DEVICE_SCALE, "mobile": true}),
         )?;
         cdp.call("Emulation.setTouchEmulationEnabled", json!({"enabled": true, "maxTouchPoints": 5}))?;
         Ok(cdp)
@@ -100,6 +105,32 @@ impl Cdp {
         Ok(())
     }
 
+    /// Tap a point of the whole page, not only of the visible viewport. The
+    /// page is scrolled so the point is on screen before the touch is sent.
+    pub fn touch_page(&mut self, x: u32, y: u32) -> Result<()> {
+        let px = (x as f64 * VIEW_W as f64 / 1000.0).clamp(0.0, (VIEW_W - 1) as f64);
+        let content = self.content_height();
+        let page_y = (y as f64 * content / 1000.0).clamp(0.0, (content - 1.0).max(0.0));
+        let scroll = (page_y - VIEW_H as f64 / 2.0).clamp(0.0, (content - VIEW_H as f64).max(0.0));
+        self.call(
+            "Runtime.evaluate",
+            json!({"expression": format!("window.scrollTo(0,{scroll})"), "returnByValue": true}),
+        )?;
+        std::thread::sleep(Duration::from_millis(180));
+        let sy = (page_y - scroll).clamp(0.0, (VIEW_H - 1) as f64);
+        self.touch(px.round() as u32, sy.round() as u32)
+    }
+
+    fn content_height(&mut self) -> f64 {
+        let metrics = self.call("Page.getLayoutMetrics", json!({})).unwrap_or(Value::Null);
+        let css = &metrics["cssContentSize"];
+        css["height"]
+            .as_f64()
+            .or_else(|| metrics["contentSize"]["height"].as_f64())
+            .unwrap_or(VIEW_H as f64)
+            .clamp(VIEW_H as f64, MAX_PAGE_CSS)
+    }
+
     pub fn pinch(&mut self, x: u32, y: u32, scale: f64) -> Result<()> {
         self.call(
             "Input.synthesizePinchGesture",
@@ -126,9 +157,28 @@ impl Cdp {
     }
 
     pub fn screenshot(&mut self) -> Result<Vec<u8>> {
-        let answer = self.call("Page.captureScreenshot", json!({"format": "png", "fromSurface": true}))?;
+        let answer = self.call(
+            "Page.captureScreenshot",
+            json!({"format": "jpeg", "quality": 82, "fromSurface": true}),
+        )?;
         let data = answer["data"].as_str().context("screenshot holds no data")?;
         base64::engine::general_purpose::STANDARD.decode(data).context("decode screenshot")
+    }
+
+    pub fn scroll(&mut self, dy: i64) -> Result<()> {
+        self.call(
+            "Input.synthesizeScrollGesture",
+            json!({
+                "x": VIEW_W / 2,
+                "y": VIEW_H / 2,
+                "xDistance": 0,
+                "yDistance": dy,
+                "speed": 900,
+                "gestureSourceType": "touch"
+            }),
+        )?;
+        std::thread::sleep(Duration::from_millis(500));
+        Ok(())
     }
 }
 
@@ -184,44 +234,51 @@ fn write_frame(stream: &mut TcpStream, payload: &[u8]) -> Result<()> {
 }
 
 fn read_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
-    let mut two = [0u8; 2];
-    stream.read_exact(&mut two)?;
-    let opcode = two[0] & 0x0f;
-    let masked = two[1] & 0x80 != 0;
-    let mut len = (two[1] & 0x7f) as u64;
-    if len == 126 {
-        let mut bytes = [0u8; 2];
-        stream.read_exact(&mut bytes)?;
-        len = u16::from_be_bytes(bytes) as u64;
-    } else if len == 127 {
-        let mut bytes = [0u8; 8];
-        stream.read_exact(&mut bytes)?;
-        len = u64::from_be_bytes(bytes);
-    }
-    if len > 16 * 1024 * 1024 {
-        bail!("Chromium sent an oversized frame");
-    }
-    let mask = if masked {
-        let mut mask = [0u8; 4];
-        stream.read_exact(&mut mask)?;
-        Some(mask)
-    } else {
-        None
-    };
-    let mut payload = vec![0u8; len as usize];
-    stream.read_exact(&mut payload)?;
-    if let Some(mask) = mask {
-        for (i, byte) in payload.iter_mut().enumerate() {
-            *byte ^= mask[i % 4];
+    let mut whole = Vec::new();
+    loop {
+        let mut two = [0u8; 2];
+        stream.read_exact(&mut two)?;
+        let fin = two[0] & 0x80 != 0;
+        let opcode = two[0] & 0x0f;
+        let masked = two[1] & 0x80 != 0;
+        let mut len = (two[1] & 0x7f) as u64;
+        if len == 126 {
+            let mut bytes = [0u8; 2];
+            stream.read_exact(&mut bytes)?;
+            len = u16::from_be_bytes(bytes) as u64;
+        } else if len == 127 {
+            let mut bytes = [0u8; 8];
+            stream.read_exact(&mut bytes)?;
+            len = u64::from_be_bytes(bytes);
+        }
+        if len > 48 * 1024 * 1024 {
+            bail!("Chromium sent an oversized frame");
+        }
+        let mask = if masked {
+            let mut mask = [0u8; 4];
+            stream.read_exact(&mut mask)?;
+            Some(mask)
+        } else {
+            None
+        };
+        let mut payload = vec![0u8; len as usize];
+        stream.read_exact(&mut payload)?;
+        if let Some(mask) = mask {
+            for (i, byte) in payload.iter_mut().enumerate() {
+                *byte ^= mask[i % 4];
+            }
+        }
+        if opcode == 0x8 {
+            return Err(anyhow!("Chromium closed the debugging socket"));
+        }
+        if opcode == 0x9 || opcode == 0xA {
+            continue;
+        }
+        whole.extend_from_slice(&payload);
+        if fin {
+            return Ok(whole);
         }
     }
-    if opcode == 0x8 {
-        return Err(anyhow!("Chromium closed the debugging socket"));
-    }
-    if opcode == 0x9 {
-        return read_frame(stream);
-    }
-    Ok(payload)
 }
 
 pub const WIDTH: u32 = VIEW_W;

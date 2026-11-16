@@ -374,7 +374,7 @@ fn saving_line(l: Lang, name: &str, done: u64, total: Option<u64>) -> (&'static 
 }
 
 fn dock(cx: &Ctx) -> Dock {
-    dock_with(cx, &[Action::BrowserBack, Action::BrowserForward, Action::BrowserReload, Action::BrowserHome, Action::BrowserTabs, Action::BrowserDownloads, Action::BrowserFullLoad])
+    dock_with(cx, &[Action::BrowserBack, Action::BrowserForward, Action::BrowserReload, Action::BrowserHome, Action::BrowserTabs, Action::BrowserDownloads, Action::BrowserFullLoad, Action::BrowserMenu])
 }
 
 fn full_dock(cx: &Ctx) -> Dock {
@@ -437,6 +437,11 @@ fn dock_with(cx: &Ctx, actions: &[Action]) -> Dock {
                 c.line(cx0 - m.dp(8.0), cy0, cx0 + m.dp(8.0), cy0, m.dp(1.5), ink);
                 c.stroke_arc(cx0, cy0, m.dp(5.0), 0.0, 6.28, m.dp(1.4), ink);
             }
+            Action::BrowserMenu => {
+                for k in 0..3 {
+                    c.fill_circle(cx0 + (k as f32 - 1.0) * m.dp(5.0), cy0, m.dp(1.8), ink);
+                }
+            }
             _ => {
                 c.line(cx0, cy0 - m.dp(9.0), cx0, cy0 + m.dp(3.0), m.dp(2.4), ink);
                 c.line(cx0 - m.dp(4.0), cy0 - m.dp(1.0), cx0, cy0 + m.dp(3.0), m.dp(2.4), ink);
@@ -461,6 +466,17 @@ fn read(cx: &Ctx, article: &WebPage) -> Frame {
     let bar = address_bar(&mut c, cx, top, &article.url);
     out.push(Hit { rect: rect_bar(cx, top), action: Action::BrowserAddress });
     let header = article_head(&mut c, cx, article, bar + m.dp(12.0));
+    let header = if article.scripts {
+        let row = Row::new(l.pick(["此页面含 JavaScript", "此頁面含 JavaScript", "This page uses JavaScript"]))
+            .subtitle(l.pick(["使用完整模式加载脚本页面", "使用完整模式載入指令碼頁面", "Open it in full mode"]))
+            .icon(PURPLE, Icon::Layers)
+            .trail(Trail::Arrow);
+        let list = widgets::list(&mut c, t, cx.f, header, &[row]);
+        out.extend(hits(&list.rows, &[Action::BrowserFullLoad]));
+        list.bottom
+    } else {
+        header
+    };
     let mut edges = vec![header.round()];
     for block in &article.blocks {
         let h = block_height(&c, cx, block);
@@ -999,6 +1015,90 @@ pub fn tabs(cx: &Ctx) -> Frame {
     );
     out.extend(hits(&new.rows, &[Action::BrowserNewTab]));
     Frame::new(t, fit(c, t, new.bottom), out, l.pick(["标签页", "分頁", "Tabs"]), top)
+}
+
+/// The browser's own menu: the pages it has read, the ones kept, and the
+/// other things it offers.
+pub fn menu(cx: &Ctx) -> Frame {
+    let (t, f, l) = (cx.t, cx.f, cx.state.lang);
+    let m = &t.m;
+    let mut c = page(cx);
+    let top = m.content_top;
+    let mut out = Vec::new();
+    let y = widgets::section_first(&mut c, t, f, top, l.pick(["浏览器菜单", "瀏覽器選單", "Browser menu"]));
+    let bookmarked = cx
+        .state
+        .browser
+        .page()
+        .is_some_and(|page| cx.state.browser.bookmarks.iter().any(|b| b.url == page.url));
+    let rows = [
+        Row::new(l.pick(["新建标签页", "新增分頁", "New tab"])).icon(BLUE, Icon::Layers).trail(Trail::None),
+        Row::new(l.pick(["历史记录", "歷史記錄", "History"])).icon(BLUE, Icon::Restore).trail(Trail::Arrow),
+        Row::new(l.pick(["书签", "書籤", "Bookmarks"])).icon(ORANGE, Icon::Backup).trail(Trail::Arrow),
+        Row::new(if bookmarked {
+            l.pick(["取消书签", "取消書籤", "Remove bookmark"])
+        } else {
+            l.pick(["添加书签", "加入書籤", "Add bookmark"])
+        })
+        .icon(ORANGE, Icon::Backup)
+        .trail(Trail::None),
+        Row::new(l.pick(["下载", "下載", "Downloads"])).icon(GREEN, Icon::Install).trail(Trail::Arrow),
+        Row::new(l.pick(["完整模式", "完整模式", "Full mode"])).icon(PURPLE, Icon::Layers).trail(Trail::Arrow),
+    ];
+    let list = widgets::list(&mut c, t, f, y, &rows);
+    out.extend(hits(&list.rows, &[
+        Action::BrowserNewTab,
+        Action::BrowserHistoryList,
+        Action::BrowserBookmarksList,
+        Action::BrowserBookmark,
+        Action::BrowserDownloads,
+        Action::BrowserFull,
+    ]));
+    Frame::new(t, c, out, l.pick(BROWSER), top)
+}
+
+/// The pages the browser has read, or the ones the user has kept: each one
+/// opened again, or forgotten.
+pub fn marks(cx: &Ctx, history: bool) -> Frame {
+    let (t, f, l) = (cx.t, cx.f, cx.state.lang);
+    let m = &t.m;
+    let mut c = page(cx);
+    let top = m.content_top;
+    let mut out = Vec::new();
+    let list = if history { &cx.state.browser.recent } else { &cx.state.browser.bookmarks };
+    let title = if history {
+        l.pick(["历史记录", "歷史記錄", "History"])
+    } else {
+        l.pick(["书签", "書籤", "Bookmarks"])
+    };
+    let mut y = widgets::section_first(&mut c, t, f, top, title);
+    if list.is_empty() {
+        y = widgets::footnote(
+            &mut c,
+            t,
+            f,
+            y,
+            if history {
+                l.pick(["本次会话还没有访问记录", "本次工作階段還沒有造訪記錄", "Nothing has been read this session"])
+            } else {
+                l.pick(["还没有书签", "還沒有書籤", "No bookmarks yet"])
+            },
+        );
+    } else {
+        for (i, mark) in list.iter().enumerate() {
+            let row = Row::new(&mark.title).subtitle(&mark.url).icon(BLUE, Icon::Globe).trail(Trail::Arrow);
+            let rows = widgets::list(&mut c, t, f, y, &[row]);
+            out.extend(hits(&rows.rows, &[Action::BrowserMarkOpen(i)]));
+            y = rows.bottom;
+            let row = Row::new(l.pick(["移除", "移除", "Remove"]))
+                .icon(RED, Icon::Wipe)
+                .trail(Trail::None);
+            let rows = widgets::list(&mut c, t, f, y, &[row]);
+            out.extend(hits(&rows.rows, &[Action::BrowserMarkRemove(i)]));
+            y = rows.bottom;
+        }
+    }
+    Frame::new(t, c, out, l.pick(BROWSER), top)
 }
 
 /// The start page's shortcuts, to remove one, add the page shown, or put

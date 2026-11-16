@@ -75,7 +75,7 @@ pub struct State {
     /// Backing up or restoring under way, or how it last ended.
     pub backup_job: Option<BackupJob>,
     /// Which logs to export: the recovery's, the kernel's.
-    pub logs: [bool; 2],
+    pub logs: [bool; 4],
     /// Where the logs go: 0 for the temporary folder, 1 for internal
     /// storage.
     pub logs_to: usize,
@@ -106,6 +106,8 @@ pub struct State {
     pub code: String,
     /// What is typed in the search field.
     pub search: String,
+    /// What is typed in the browser's file-search field.
+    pub files_search: String,
     /// The on-screen keyboard's layer.
     pub layer: Layer,
     /// The key of the on-screen keyboard, or the choice of a list open over
@@ -226,16 +228,14 @@ pub struct State {
     /// rather than starting at once.
     pub queue_picking: bool,
     /// The package whose install failed, which stopped the queue there.
-    pub queue_stopped: Option<String>,
-    pub drive: Folder,
+            pub queue_stopped: Option<String>,
     /// Magisk, KernelSU or APatch and its modules.
     pub magisk: Magisk,
     /// The file manager is choosing a module zip for the Magisk page.
-    /// How fast data went over the network joined in the last second.
-    pub traffic: Traffic,
-    /// The web page, where the browser stands, what it has saved, and the
-    /// form and cookies it keeps.
-    pub browser: Browser,
+    pub magisk_pick: bool,
+            /// The web page, where the browser stands, what it has saved, and the
+            /// form and cookies it keeps.
+            pub browser: Browser,
 }
 
 impl Default for State {
@@ -274,7 +274,7 @@ impl Default for State {
             backups: Vec::new(),
             restore: None,
             backup_job: None,
-            logs: [true, true],
+            logs: [true, true, false, false],
             logs_to: 0,
             boot_slots: None,
             next_slot: None,
@@ -286,6 +286,7 @@ impl Default for State {
             data: Data::Closed,
             code: String::new(),
             search: String::new(),
+            files_search: String::new(),
             layer: Layer::Letters,
             held: None,
             files: Folder::new("/"),
@@ -336,10 +337,11 @@ impl Default for State {
             queue_active: false,
             queue_picking: false,
             queue_stopped: None,
+            magisk: Magisk::default(),
+            magisk_pick: false,
+            browser: Browser::default(),
         }
     }
-            magisk: Magisk::default(),
-            browser: Browser::default(),
 }
 
 impl State {

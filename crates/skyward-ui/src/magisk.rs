@@ -128,7 +128,7 @@ pub fn screen(cx: &Ctx) -> Frame {
                 } else {
                     format!("{} · {}", module.version, module.description)
                 };
-                let row = Row::new(&module.name).subtitle(&sub).trail(Trail::Switch(module.enabled));
+                let row = Row::new(&module.name).subtitle_short(&sub).trail(Trail::Switch(module.enabled));
                 let list = widgets::list(&mut c, t, f, y, &[row]);
                 out.extend(hits(&list.rows, &[Action::ToggleMagiskModule(i)]));
                 y = list.bottom + m.dp(6.0);

@@ -141,6 +141,9 @@ pub struct Page {
     pub description: Option<String>,
     pub blocks: Vec<Block>,
     pub forms: Vec<Form>,
+    /// The page carried scripts, so a reader without JavaScript sees only
+    /// its initial HTML.
+    pub scripts: bool,
     /// The cookies the answer set.
     pub cookies: Vec<Cookie>,
     /// The page was longer than [`MAX_PAGE`], or held more blocks than
@@ -212,6 +215,34 @@ pub fn readable_url(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
 
+/// An address the http crate accepts. Pages leave quotes, spaces and the
+/// like raw in their links, and a link the browser will not open is of no
+/// use. What a page already escaped is kept as it is; the rest of the
+/// characters that mean something in an address keep their meaning.
+fn escaped_address(url: &str) -> String {
+    let keep = b"-._~:/?#[]@!$&'()*+,;=";
+    let bytes = url.as_bytes();
+    let mut out = String::with_capacity(url.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'%' && i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_hexdigit()
+            && bytes[i + 2].is_ascii_hexdigit()
+        {
+            out.push_str(&url[i..i + 3]);
+            i += 3;
+        } else if b.is_ascii_alphanumeric() || keep.contains(&b) {
+            out.push(b as char);
+            i += 1;
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+            i += 1;
+        }
+    }
+    out
+}
+
 /// A page's or file's name as it would be saved, from the last part of its
 /// address.
 pub fn file_name(url: &str) -> String {
@@ -252,18 +283,19 @@ pub fn open(agent: &ureq::Agent, url: &str) -> Result<Opened> {
 
 /// Fetch `url`, sending the cookies the browser keeps for it.
 pub fn open_with(agent: &ureq::Agent, url: &str, cookie: Option<&str>) -> Result<Opened> {
-    if !readable_url(url) {
+    let url = escaped_address(url);
+    if !readable_url(&url) {
         bail!("{url} is not an http or https address");
     }
     let mut request = agent
-        .get(url)
+        .get(&url)
         .header("User-Agent", USER_AGENT)
         .header("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8");
     if let Some(cookie) = cookie {
         request = request.header("Cookie", cookie);
     }
     let response = request.call().with_context(|| format!("open {url}"))?;
-    read_answer(agent, response, url)
+    read_answer(agent, response, &url)
 }
 
 /// Send a form, as the page asks: its fields in the address for a GET, and
@@ -275,7 +307,8 @@ pub fn submit(
     post: bool,
     cookie: Option<&str>,
 ) -> Result<Opened> {
-    if !readable_url(url) {
+    let url = escaped_address(url);
+    if !readable_url(&url) {
         bail!("{url} is not an http or https address");
     }
     let mut encoded = String::new();
@@ -288,7 +321,7 @@ pub fn submit(
         encoded.push_str(&percent_encode(v));
     }
     let target = if post {
-        url.to_string()
+        url.clone()
     } else if url.contains('?') {
         format!("{url}&{encoded}")
     } else {
@@ -314,7 +347,7 @@ pub fn submit(
         }
         request.call().with_context(|| format!("submit {url}"))?
     };
-    read_answer(agent, response, url)
+    read_answer(agent, response, &url)
 }
 
 /// Read what a server answered, as [`open_with`] and [`submit`] do.
@@ -468,14 +501,15 @@ pub fn save(
     stop: &AtomicBool,
     progress: &mut dyn FnMut(Saving),
 ) -> Result<u64> {
-    if !readable_url(url) {
+    let url = escaped_address(url);
+    if !readable_url(&url) {
         bail!("{url} is not an http or https address");
     }
     let dir = path.parent().context("a download has a folder to go in")?;
     fs::create_dir_all(dir).with_context(|| format!("make {}", dir.display()))?;
     let part = partial(path);
     let response = agent
-        .get(url)
+        .get(&url)
         .header("User-Agent", USER_AGENT)
         .header("Accept", "*/*")
         .call()
@@ -615,6 +649,7 @@ fn plain_page(url: &str, text: &str, truncated: bool) -> Page {
         description: None,
         blocks,
         forms: Vec::new(),
+        scripts: false,
         cookies: Vec::new(),
         truncated,
     }
@@ -661,6 +696,7 @@ fn rss_page(url: &str, text: &str, truncated: bool) -> Page {
         description: None,
         blocks,
         forms: Vec::new(),
+        scripts: false,
         cookies: Vec::new(),
         truncated: truncated || n >= 30,
     };
@@ -816,6 +852,9 @@ struct Parser {
     /// The forms read, and the one being read.
     forms: Vec<Form>,
     form: Option<usize>,
+    /// The page carried scripts, so a reader without JavaScript sees only
+    /// its initial HTML.
+    scripts: bool,
     /// The last block pushed, to join what a page split around inline tags.
     truncated: bool,
 }
@@ -845,6 +884,7 @@ impl Parser {
             rules: Vec::new(),
             forms: Vec::new(),
             form: None,
+            scripts: false,
             truncated: false,
         }
     }
@@ -919,7 +959,11 @@ impl Parser {
             return;
         }
         match name {
-            "script" | "style" | "noscript" | "template" | "svg" | "iframe" | "canvas" | "nav" | "footer" | "aside" | "select"
+            "script" => {
+                self.scripts = true;
+                self.skip = Some(name.to_string());
+            }
+            "style" | "noscript" | "template" | "svg" | "iframe" | "canvas" | "nav" | "footer" | "aside" | "select"
             | "option" | "textarea" => {
                 self.skip = Some(name.to_string());
             }
@@ -1209,6 +1253,7 @@ impl Parser {
             blocks: std::mem::take(&mut self.blocks),
             forms: std::mem::take(&mut self.forms),
             cookies: Vec::new(),
+            scripts: self.scripts,
             truncated: cut || self.truncated,
         }
     }
