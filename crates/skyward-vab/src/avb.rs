@@ -474,7 +474,7 @@ mod tests {
             ("vbmeta_system_a", shipped(&base, "vbmeta_system_a", 0)),
             ("vbmeta_vendor_a", shipped(&base, "vbmeta_vendor_a", 0)),
         ];
-        std::env::set_var("SKYWARD_VAB_TEST_BLOCKS", &base);
+        unsafe { std::env::set_var("SKYWARD_VAB_TEST_BLOCKS", &base) };
         let both = HASHTREE_DISABLED | VERIFICATION_DISABLED;
 
         // Turning the checks off: each block changes only in its flag word,
@@ -519,7 +519,7 @@ mod tests {
         assert!(untouched.is_empty(), "a block that does not say the recovery left it saying is skipped");
         assert_eq!(flags_of(&base.join("vbmeta_a")), 0);
 
-        std::env::remove_var("SKYWARD_VAB_TEST_BLOCKS");
+        unsafe { std::env::remove_var("SKYWARD_VAB_TEST_BLOCKS") };
         std::fs::remove_dir_all(&scratch).unwrap();
     }
 
@@ -537,7 +537,7 @@ mod tests {
 
         // ROM A: original vbmeta (algorithm=2, flags=0).
         shipped(&base, "vbmeta_a", 0);
-        std::env::set_var("SKYWARD_VAB_TEST_BLOCKS", &base);
+        unsafe { std::env::set_var("SKYWARD_VAB_TEST_BLOCKS", &base) };
         let both = HASHTREE_DISABLED | VERIFICATION_DISABLED;
 
         // Turn AVB off under ROM A — this creates the backup.
@@ -565,7 +565,7 @@ mod tests {
         let current = std::fs::read(base.join("vbmeta_a")).unwrap();
         assert_eq!(current, rom_b, "foreign block was not left untouched");
 
-        std::env::remove_var("SKYWARD_VAB_TEST_BLOCKS");
+        unsafe { std::env::remove_var("SKYWARD_VAB_TEST_BLOCKS") };
         std::fs::remove_dir_all(&scratch).unwrap();
     }
 
@@ -586,7 +586,7 @@ mod tests {
         let vbmeta_sys = shipped(&base, "vbmeta_system_a", both);
         let _vbmeta_vnd = shipped(&base, "vbmeta_vendor_a", both);
 
-        std::env::set_var("SKYWARD_VAB_TEST_BLOCKS", &base);
+        unsafe { std::env::set_var("SKYWARD_VAB_TEST_BLOCKS", &base) };
         let kept = scratch.join("kept");
 
         // Make a backup for only the first two blocks (simulating a case
@@ -606,7 +606,7 @@ mod tests {
         assert_eq!(flags_of(&base.join("vbmeta_system_a")), both, "second block was written despite later failure");
         assert_eq!(flags_of(&base.join("vbmeta_vendor_a")), both, "third block was changed");
 
-        std::env::remove_var("SKYWARD_VAB_TEST_BLOCKS");
+        unsafe { std::env::remove_var("SKYWARD_VAB_TEST_BLOCKS") };
         std::fs::remove_dir_all(&scratch).unwrap();
     }
 }

@@ -1604,6 +1604,7 @@ fn browser_page() -> WebPage {
             },
         ],
         forms: Vec::new(),
+        scripts: false,
         cookies: Vec::new(),
         truncated: false,
     }
