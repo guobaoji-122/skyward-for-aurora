@@ -87,7 +87,9 @@ mod tests {
     fn a_cipher_or_a_key_the_phone_does_not_name_is_an_error() {
         assert!(Encryption::of(&entry("quota")).is_err());
         assert!(Encryption::of(&entry("metadata_encryption=rot13")).is_err());
-        assert!(key_dir(&entry("quota")).is_err());
+        // A table with no keydirectory falls back to the words every build
+        // writes; only a malformed one is an error.
+        assert_eq!(key_dir(&entry("quota")).unwrap(), Path::new("/metadata/vold/metadata_encryption/key"));
     }
 
     #[test]
