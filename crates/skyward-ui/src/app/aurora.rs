@@ -168,8 +168,6 @@ impl App {
         self.refresh();
     }
 
-    /// How switching the slot to start next went: what the boot control
-
     /// `drag` is how far a finger has swiped up on the dark glass, in dp:
     /// the face goes up with the finger and fades as it goes, so that the
     /// panel comes up where the finger has brought it and not all at once.

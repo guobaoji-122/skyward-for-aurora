@@ -17,6 +17,7 @@ const VIEW_H: u32 = 915;
 /// decode comfortably in recovery memory.
 const DEVICE_SCALE: f64 = 2.0;
 /// A full-page capture is capped so one frame cannot exhaust recovery memory.
+#[allow(dead_code)]
 const MAX_PAGE_CSS: f64 = 2500.0;
 
 pub struct Cdp {
@@ -107,6 +108,7 @@ impl Cdp {
 
     /// Tap a point of the whole page, not only of the visible viewport. The
     /// page is scrolled so the point is on screen before the touch is sent.
+    #[allow(dead_code)]
     pub fn touch_page(&mut self, x: u32, y: u32) -> Result<()> {
         let px = (x as f64 * VIEW_W as f64 / 1000.0).clamp(0.0, (VIEW_W - 1) as f64);
         let content = self.content_height();
@@ -121,6 +123,7 @@ impl Cdp {
         self.touch(px.round() as u32, sy.round() as u32)
     }
 
+    #[allow(dead_code)]
     fn content_height(&mut self) -> f64 {
         let metrics = self.call("Page.getLayoutMetrics", json!({})).unwrap_or(Value::Null);
         let css = &metrics["cssContentSize"];

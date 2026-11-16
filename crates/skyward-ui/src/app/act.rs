@@ -864,11 +864,10 @@ impl App {
                             self.state.browser.recent.remove(i);
                         }
                     }
-                    Screen::BrowserBookmarks => {
-                        if i < self.state.browser.bookmarks.len() {
+                    Screen::BrowserBookmarks
+                        if i < self.state.browser.bookmarks.len() => {
                             self.state.browser.bookmarks.remove(i);
                         }
-                    }
                     _ => {}
                 }
                 self.refresh();
@@ -880,7 +879,7 @@ impl App {
             Action::BrowserPluginDownload => {
                 if !self.state.data.storage_open() {
                     self.say(l.pick(["请先解密 data 分区", "請先解密 data 分割區", "Decrypt the data partition first"]), now);
-                } else if self.state.browser.plugin_download.as_ref().is_some_and(|d| d.error.is_none() && d.total.map_or(true, |t| d.done < t)) {
+                } else if self.state.browser.plugin_download.as_ref().is_some_and(|d| d.error.is_none() && d.total.is_none_or(|t| d.done < t)) {
                     self.say(l.pick(["插件正在下载", "外掛正在下載", "The plugin is downloading"]), now);
                 } else {
                     self.state.browser.plugin_download = Some(PluginDownload { done: 0, total: None, speed: 0, error: None });
@@ -968,23 +967,21 @@ impl App {
             Action::ReadMagisk => return vec![Effect::ReadMagisk],
 
             Action::RemoveMagiskModule(i) => {
-                if let Some(Ok(modules)) = self.state.magisk.modules.as_ref() {
-                    if let Some(module) = modules.get(i) {
+                if let Some(Ok(modules)) = self.state.magisk.modules.as_ref()
+                    && let Some(module) = modules.get(i) {
                         return vec![Effect::RemoveMagisk { id: module.id.clone(), path: module.path.clone() }];
                     }
-                }
             }
 
             Action::ToggleMagiskModule(i) => {
-                if let Some(Ok(modules)) = self.state.magisk.modules.as_ref() {
-                    if let Some(module) = modules.get(i) {
+                if let Some(Ok(modules)) = self.state.magisk.modules.as_ref()
+                    && let Some(module) = modules.get(i) {
                         return vec![Effect::ToggleMagisk {
                             id: module.id.clone(),
                             path: module.path.clone(),
                             enabled: !module.enabled,
                         }];
                     }
-                }
             }
 
         }

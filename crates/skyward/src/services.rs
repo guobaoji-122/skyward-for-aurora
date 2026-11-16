@@ -150,11 +150,10 @@ pub fn start(services: &[Service], libraries: Option<&Path>) -> Result<()> {
             // hardware; the installed ROM renamed its vendor binary. Take
             // the first alternate that is there, so the service keeps
             // working without a separate device file per build.
-            if let Some(alts) = &s.alternates {
-                if let Some(found) = alts.iter().find(|a| Path::new(a).is_file()) {
+            if let Some(alts) = &s.alternates
+                && let Some(found) = alts.iter().find(|a| Path::new(a).is_file()) {
                     s.path = found.clone();
                 }
-            }
         }
         if !Path::new(&s.path).is_file() {
             if s.optional {
@@ -350,6 +349,7 @@ fn make_socket(socket: &Socket, uid: libc::uid_t, gid: libc::gid_t) -> Result<Ow
 /// End the program an earlier run of the recovery service left running,
 /// and wait until the service it was ready with is gone from the service
 /// directory, so that waiting for the one started next waits for that one.
+#[allow(dead_code)]
 fn end_left(s: &Service) -> Result<()> {
     let Some(pid) = running(&s.path) else { return Ok(()) };
     if unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } != 0 {

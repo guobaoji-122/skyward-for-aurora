@@ -35,6 +35,7 @@ pub enum Task {
     /// Unpack the plugin package at `archive` into `dir`.
     Install { archive: PathBuf, dir: PathBuf },
     /// Run the plugin's `run.sh`, which writes the page to `out`.
+    #[allow(dead_code)]
     Full { dir: PathBuf, url: String, out: PathBuf },
     /// Start the persistent Chromium session used by the full browser.
     FullStart { dir: PathBuf, url: String },

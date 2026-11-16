@@ -78,6 +78,7 @@ fn program(path: &str, libraries: &[&str], user: &str, groups: &[&str]) -> Servi
         user: Some(user.into()),
         groups: strings(groups),
         capabilities: Vec::new(),
+        ..Default::default()
     }
 }
 

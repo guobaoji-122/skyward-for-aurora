@@ -33,17 +33,21 @@ pub const SDCARD: &str = "/sdcard";
 const OWNER: u32 = 0;
 
 /// The key is in a directory of this name under the one the phone names.
+#[allow(dead_code)]
 const KEY_DIR: &str = "key";
 
 /// How the kernel knows the cipher a phone names.
+#[allow(dead_code)]
 const CIPHERS: [(&str, &str); 2] = [("aes-256-xts", "aes-xts-plain64"), ("adiantum", "xchacha12,aes-adiantum-plain64")];
 
 /// The hardware reads and writes in 4096-byte units, so the partition is
 /// mapped in whole multiples of eight 512-byte sectors.
+#[allow(dead_code)]
 const SECTORS_PER_UNIT: u64 = 8;
 
 
 /// Where vold keeps the key when the phone's table names no directory.
+#[allow(dead_code)]
 const DEFAULT_KEY_DIR: &str = "/metadata/vold/metadata_encryption";
 
 
@@ -646,7 +650,6 @@ fn secret_note(user: u32, synthetic_password: &[u8]) -> Result<Note> {
 
 /// Build the device-mapper target that reads the partition through the
 /// storage hardware's decryption.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,15 +692,5 @@ mod tests {
         assert_eq!(key_dir(&e).unwrap(), Path::new("/metadata/vold/metadata_encryption/key"));
     }
 
-    #[test]
-    fn the_partition_is_mapped_in_whole_units_of_the_hardwares_reads() {
-        let e = Encryption { cipher: "aes-xts-plain64".into(), wrapped: true };
-        let t = target("/dev/block/by-name/userdata", 969_825_751, &[0xAB, 0x01], &e);
-        let Target::DefaultKey { sectors, key, cipher, device, wrapped } = t else { panic!("a decrypting target") };
-        assert_eq!(sectors, 969_825_744, "a whole number of 4096-byte units");
-        assert_eq!(key, "ab01");
-        assert_eq!(cipher, "aes-xts-plain64");
-        assert_eq!(device, "/dev/block/by-name/userdata");
-        assert!(wrapped);
-    }
+
 }

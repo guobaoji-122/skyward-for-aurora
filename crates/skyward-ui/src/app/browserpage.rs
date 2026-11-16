@@ -3,7 +3,6 @@
 
 use super::*;
 use skyward_net::web::Opened;
-use crate::icons::Icon;
 use skyward_net::web::Page as WebPage;
 
 
@@ -89,13 +88,13 @@ impl Browser {
 
 
 /// Whether a folder is on the OTG drive, which the file manager reads with
-
 /// the USB port as host.
-
+#[allow(dead_code)]
 fn on_otg(path: &str) -> bool {
     path == USB_DRIVE || path.starts_with(&format!("{USB_DRIVE}/"))
 }
 
+#[allow(dead_code)]
 fn read_dir_effect(path: String) -> Effect {
     if on_otg(&path) {
         Effect::ReadUsbDir(path)
@@ -104,6 +103,7 @@ fn read_dir_effect(path: String) -> Effect {
     }
 }
 
+#[allow(dead_code)]
 fn escape_text(text: &str) -> String {
     let mut out = String::new();
     for byte in text.bytes() {
@@ -117,11 +117,8 @@ fn escape_text(text: &str) -> String {
 }
 
 /// The address the plugin should load. The basic reader asks Bing for RSS;
-
 /// Chromium should get the same search without `format=rss`, or it renders
-
 /// an XML feed instead of the page.
-
 fn chromium_url(url: &str) -> String {
     let mut url = url
         .replace("?format=rss&", "?")
@@ -534,7 +531,7 @@ pub fn browser_plugin_start(&mut self, now: u64) -> Vec<Effect> {
         self.browser_plugin_start_at(url, now)
     }
 
-pub fn browser_plugin_tap(&mut self, x: u16, y: u16, now: u64) -> Vec<Effect> {
+pub fn browser_plugin_tap(&mut self, x: u16, y: u16, _now: u64) -> Vec<Effect> {
         if self.state.browser.url.is_empty() || self.state.browser.full_shot.is_none() {
             return Vec::new();
         }
@@ -702,11 +699,10 @@ pub fn browser_plugin_shot(&mut self, shot: Result<Vec<u8>, String>) {        ma
 
     /// The plugin package finished, or why it did not.
     pub fn plugin_downloaded(&mut self, ended: Result<(), String>) {
-        if let Some(d) = self.state.browser.plugin_download.as_mut() {
-            if let Err(why) = ended {
+        if let Some(d) = self.state.browser.plugin_download.as_mut()
+            && let Err(why) = ended {
                 d.error = Some(why);
             }
-        }
         if self.screen() == Screen::BrowserFull {
             self.refresh();
         }

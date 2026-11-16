@@ -45,11 +45,10 @@ impl DoubleTap {
     }
 
     pub fn move_to(&mut self, x: f32, y: f32, slop: f32) {
-        if let Some((_, x0, y0)) = self.down {
-            if (x - x0).hypot(y - y0) > slop {
+        if let Some((_, x0, y0)) = self.down
+            && (x - x0).hypot(y - y0) > slop {
                 self.stray = true;
             }
-        }
     }
 
     /// A finger came up: true when this was the second tap of a double tap.

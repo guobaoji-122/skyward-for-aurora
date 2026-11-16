@@ -5,7 +5,7 @@ use crate::app::{Action, Frame, Hit, MagiskRoot};
 use crate::canvas::Canvas;
 use crate::geom::Rect;
 use crate::icons::Icon;
-use crate::pages::{Band, Ctx};
+use crate::pages::Ctx;
 use crate::theme::Theme;
 use crate::widgets::{self, Row, Trail};
 
@@ -98,8 +98,8 @@ pub fn screen(cx: &Ctx) -> Frame {
         let list = widgets::list(&mut c, t, f, y, &[row]);
         y = list.bottom;
         out.extend(hits(&list.rows, &[Action::CheckMagiskUpdate]));
-        if let Some(latest) = &s.magisk.latest {
-            if Some(latest) != s.magisk.version.as_ref() {
+        if let Some(latest) = &s.magisk.latest
+            && Some(latest) != s.magisk.version.as_ref() {
                 let row = Row::new(l.pick(["下载并安装更新", "下載並安裝更新", "Download and install"]))
                     .subtitle(latest)
                     .icon(crate::color::Rgba::rgb(0x1d, 0xcd, 0x3a), Icon::Install)
@@ -108,7 +108,6 @@ pub fn screen(cx: &Ctx) -> Frame {
                 y = list.bottom;
                 out.extend(hits(&list.rows, &[Action::MagiskDownload]));
             }
-        }
     }
     y = widgets::section(&mut c, t, f, y, l.pick(["模块", "模組", "Modules"]));
     match &s.magisk.modules {

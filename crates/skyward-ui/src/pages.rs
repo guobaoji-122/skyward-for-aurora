@@ -1162,7 +1162,7 @@ fn reflashed(c: &mut Canvas, cx: &Ctx, y: f32) -> f32 {
     match &cx.state.reflash {
         None => y,
         Some(Reflash::Written(written)) => {
-            let slots = fmt::slots(l, &written);
+            let slots = fmt::slots(l, written);
             let said = match (l, written.len()) {
                 (Lang::En, 1) => format!("Skyward went back into {slots}'s recovery partition."),
                 _ => tr!(l, "已将 Skyward 重新刷入{slots} 的 recovery 分区。", "已將 Skyward 重新刷入{slots} 的 recovery 分割區。", "Skyward went back into the recovery partitions of {slots}."),
@@ -1172,7 +1172,7 @@ fn reflashed(c: &mut Canvas, cx: &Ctx, y: f32) -> f32 {
         Some(Reflash::Failed(why)) => {
             let note = l.pick(["未能将 Skyward 重新刷入 recovery 分区。", "無法將 Skyward 重新刷入 recovery 分割區。", "Couldn't flash Skyward back into the recovery partitions."]);
             let y = widgets::footnote(c, t, f, y, note);
-            widgets::footnote(c, t, f, y, &why)
+            widgets::footnote(c, t, f, y, why)
         }
     }
 }
@@ -2101,8 +2101,8 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
                     }
                     // The boot partitions' vbmeta checks the system's: one of
                     // another version without the other may not start.
-                    if let (Some(was), Some(now)) = (&held.system, &i.os_version) {
-                        if was != now && chosen[0] != chosen[1] {
+                    if let (Some(was), Some(now)) = (&held.system, &i.os_version)
+                        && was != now && chosen[0] != chosen[1] {
                             let warn = tr!(
                                 l,
                                 "该备份来自 {was}，本机当前为 {now}。仅恢复启动分区或系统分区中的一项，可能导致无法开机。",
@@ -2111,7 +2111,6 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
                             );
                             y = widgets::footnote(&mut c, t, f, y, &warn);
                         }
-                    }
                     let (label, danger) = confirm_label(Confirm::Restore, cx.state);
                     let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
                     out.push(Hit { rect: track, action: Action::Confirm(Confirm::Restore) });

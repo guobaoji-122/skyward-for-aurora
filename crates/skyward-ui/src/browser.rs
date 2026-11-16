@@ -20,10 +20,14 @@ const OPEN_ADDRESS: Text = ["打开网址", "開啟網址", "Open address"];
 const HINT: Text = ["输入网址或搜索词", "輸入網址或搜尋詞", "Enter an address or search for something"];
 const GO: Text = ["访问", "前往", "Go"];
 const CLEAR: Text = ["清空", "清除", "Clear"];
+#[allow(dead_code)]
 const SEARCH: Text = ["搜索", "搜尋", "Search"];
 const DOWNLOADS: Text = ["下载的文件", "下載的檔案", "Downloads"];
+#[allow(dead_code)]
 const BACK: Text = ["后退", "上一頁", "Back"];
+#[allow(dead_code)]
 const FORWARD: Text = ["前进", "下一頁", "Forward"];
+#[allow(dead_code)]
 const RELOAD: Text = ["刷新", "重新整理", "Reload"];
 const DOWNLOAD: Text = ["下载", "下載", "Download"];
 const RETRY: Text = ["重试", "重試", "Try again"];
@@ -37,7 +41,6 @@ const ORANGE: Rgba = Rgba::rgb(0xff, 0x69, 0x00);
 const RED: Rgba = Rgba::rgb(0xfa, 0x38, 0x2e);
 
 /// The sites the start page offers, now kept in the browser's state.
-
 fn sheet(cx: &Ctx, h: u32) -> Canvas {
     let w = cx.t.m.w;
     let Band { rows, cols } = cx.band.unwrap_or(Band { rows: (0, h), cols: (0, w) });
@@ -203,13 +206,11 @@ fn home(cx: &Ctx) -> Frame {
 
     y = widgets::section(&mut c, t, f, y, l.pick(DOWNLOADS));
     let count = s.browser.downloads.len();
-    if let Some(i) = s.browser.saving {        if let Some(d) = s.browser.downloads.get(i) {
-            if let BrowserSave::Downloading { done, total } = d.state {
+    if let Some(i) = s.browser.saving        && let Some(d) = s.browser.downloads.get(i)
+            && let BrowserSave::Downloading { done, total } = d.state {
                 let (head, detail, share) = saving_line(l, &d.name, done, total);
                 y = widgets::progress_card(&mut c, t, f, y, head, &detail, share);
             }
-        }
-    }
     let sub = if count == 0 {
         l.pick(["还没有下载", "還沒有下載", "Nothing downloaded"]).to_string()
     } else {
@@ -287,8 +288,8 @@ fn full_page(cx: &Ctx) -> Frame {
                         w as f32 / cols as f32,
                         h as f32 / rows as f32,
                     );
-                    let px = ((gx * 1000 + 500) / cols as i32) as u16;
-                    let py = ((gy * 1000 + 500) / rows as i32) as u16;
+                    let px = ((gx * 1000 + 500) / cols) as u16;
+                    let py = ((gy * 1000 + 500) / rows) as u16;
                     out.push(Hit { rect, action: Action::BrowserPluginTap(px, py) });
                 }
             }
@@ -435,7 +436,7 @@ fn dock_with(cx: &Ctx, actions: &[Action]) -> Dock {
             Action::BrowserFullLoad => {
                 c.stroke_round_rect(cx0 - m.dp(8.0), cy0 - m.dp(8.0), m.dp(16.0), m.dp(16.0), m.dp(8.0), m.dp(1.8), ink);
                 c.line(cx0 - m.dp(8.0), cy0, cx0 + m.dp(8.0), cy0, m.dp(1.5), ink);
-                c.stroke_arc(cx0, cy0, m.dp(5.0), 0.0, 6.28, m.dp(1.4), ink);
+                c.stroke_arc(cx0, cy0, m.dp(5.0), 0.0, std::f32::consts::TAU, m.dp(1.4), ink);
             }
             Action::BrowserMenu => {
                 for k in 0..3 {
@@ -487,8 +488,8 @@ fn read(cx: &Ctx, article: &WebPage) -> Frame {
         if let WebBlock::Link { .. } = block {
             rows.push(Hit { rect: Rect::new(0.0, edges[i], m.w as f32, edges[i + 1] - edges[i]), action: Action::BrowserLink(i) });
         }
-        if let WebBlock::Form(form) = block {
-            if let Some(fields) = article.forms.get(*form).map(|f| &f.fields) {
+        if let WebBlock::Form(form) = block
+            && let Some(fields) = article.forms.get(*form).map(|f| &f.fields) {
                 let mut y = edges[i] + m.dp(38.0);
                 for (j, field) in fields.iter().enumerate() {
                     if field.kind == web::FieldKind::Hidden {
@@ -503,7 +504,6 @@ fn read(cx: &Ctx, article: &WebPage) -> Frame {
                     y += m.dp(48.0);
                 }
             }
-        }
     }
     out.extend(rows);
     let mut frame = Frame::new(t, c, out, l.pick(BROWSER), top);
@@ -785,17 +785,15 @@ pub fn downloads(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let top = m.content_top;
     let mut y = top;
-    if let Some(i) = s.browser.saving {
-        if let Some(d) = s.browser.downloads.get(i) {
-            if let BrowserSave::Downloading { done, total } = d.state {
+    if let Some(i) = s.browser.saving
+        && let Some(d) = s.browser.downloads.get(i)
+            && let BrowserSave::Downloading { done, total } = d.state {
                 let (head, detail, share) = saving_line(l, &d.name, done, total);
                 y = widgets::progress_card(&mut c, t, f, y, head, &detail, share);
                 let stop = widgets::list(&mut c, t, f, y + m.card_gap, &[Row::new(l.pick(["停止下载", "停止下載", "Stop downloading"])).icon(RED, Icon::Wipe).trail(Trail::None)]);
                 out.extend(hits(&stop.rows, &[Action::BrowserStopDownload]));
                 y = stop.bottom + m.card_gap;
             }
-        }
-    }
     if s.browser.downloads.is_empty() {
         let list = widgets::list(&mut c, t, f, y, &[Row::new(l.pick(NO_DOWNLOADS)).trail(Trail::None)]);
         y = list.bottom;
@@ -926,8 +924,8 @@ pub fn full(cx: &Ctx) -> Frame {
     let list = widgets::list(&mut c, t, f, y + m.card_gap, &rows);
     out.extend(hits(&list.rows, &actions));
     y = list.bottom;
-    if s.browser.full_shot.is_none() {
-        if let Some(progress) = s.browser.full_progress {
+    if s.browser.full_shot.is_none()
+        && let Some(progress) = s.browser.full_progress {
             y = widgets::progress_card(
                 &mut c,
                 t,
@@ -938,7 +936,6 @@ pub fn full(cx: &Ctx) -> Frame {
                 Some(progress),
             );
         }
-    }
     if let Some(shot) = &s.browser.full_shot {
         let max_w = m.w as f32 - m.margin * 2.0;
         if let Some((w, h, rgba)) = decode_picture(shot, max_w as u32) {
@@ -955,8 +952,8 @@ pub fn full(cx: &Ctx) -> Frame {
                         w as f32 / cols as f32,
                         h as f32 / rows as f32,
                     );
-                    let px = ((gx * 1000 + 500) / cols as i32) as u16;
-                    let py = ((gy * 1000 + 500) / rows as i32) as u16;
+                    let px = ((gx * 1000 + 500) / cols) as u16;
+                    let py = ((gy * 1000 + 500) / rows) as u16;
                     out.push(Hit { rect, action: Action::BrowserPluginTap(px, py) });
                 }
             }
@@ -1073,7 +1070,7 @@ pub fn marks(cx: &Ctx, history: bool) -> Frame {
     };
     let mut y = widgets::section_first(&mut c, t, f, top, title);
     if list.is_empty() {
-        y = widgets::footnote(
+        widgets::footnote(
             &mut c,
             t,
             f,
@@ -1286,12 +1283,12 @@ fn decode_jpeg(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
             }
         }
         jpeg_decoder::PixelFormat::RGB24 => {
-            for p in pixels.chunks_exact(3) {
+            for p in pixels.as_chunks::<3>().0 {
                 rgba.extend_from_slice(&[p[0], p[1], p[2], 255]);
             }
         }
         jpeg_decoder::PixelFormat::CMYK32 => {
-            for p in pixels.chunks_exact(4) {
+            for p in pixels.as_chunks::<4>().0 {
                 let k = u16::from(p[3]);
                 let c = (u16::from(p[0]) * k) / 255;
                 let m = (u16::from(p[1]) * k) / 255;
@@ -1322,8 +1319,10 @@ fn scale_picture((w, h, rgba): (u32, u32, Vec<u8>), max_w: u32) -> Option<(u32, 
     Some((nw, nh, scaled))
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Canvas, Lang, Theme, widgets};
 
     #[test]
     fn a_paragraph_is_wrapped_to_the_content_width() {

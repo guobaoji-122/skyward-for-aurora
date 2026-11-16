@@ -800,7 +800,7 @@ enum Drag {
 
 /// Where the keys are on a page.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Focus {
+pub enum Focus {
     /// Nowhere yet: the first control in view lights once the keys work
     /// the page.
     Unset,

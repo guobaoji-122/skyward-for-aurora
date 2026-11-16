@@ -35,6 +35,7 @@ const VENDOR_INTERFACE: &str = "ro.vndk.version";
 /// own.
 const DESCRIPTIONS: [&str; 2] = ["/vendor/etc/vintf/manifest", "/odm/etc/vintf/manifest"];
 const RECOVERY_DESCRIPTIONS: &str = "/system/etc/vintf/manifest";
+#[allow(dead_code)]
 const PHONE_DESCRIPTION: &str = "phone.xml";
 
 /// The name init knows the service directory by, and the program it runs.
